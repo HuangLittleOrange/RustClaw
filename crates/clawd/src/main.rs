@@ -14,11 +14,11 @@ use claw_core::config::{
     AppConfig, ChannelBindingConfig, CommandIntentConfig, LlmProviderConfig, MaintenanceConfig,
     MemoryConfig, PersonaConfig, RoutingConfig, ScheduleConfig, ToolsConfig,
 };
-use claw_core::skill_registry::{SkillKind, SkillsRegistry};
 use claw_core::hard_rules::main_flow::load_main_flow_rules;
 use claw_core::hard_rules::trade as hard_trade;
 use claw_core::hard_rules::trade::CompiledTradeRules;
 use claw_core::hard_rules::types::MainFlowRules;
+use claw_core::skill_registry::{SkillKind, SkillsRegistry};
 use claw_core::types::{
     ApiResponse, AuthIdentity, ChannelKind, ExchangeCredentialStatus, HealthResponse,
     SubmitTaskRequest, SubmitTaskResponse, TaskQueryResponse, TaskStatus,
@@ -167,7 +167,10 @@ fn build_skill_views(
 
 /// Phase 4: 重载 skill 视图并更新 AppState。从 config_path_for_reload 重读 config，取最新 skills.registry_path / skill_switches / skills_list，再重建视图。失败不更新状态，返回 Err。
 pub(crate) fn reload_skill_views(state: &AppState) -> Result<ReloadSkillViewsResult, String> {
-    info!("reload_skill_views: started config_path={}", state.config_path_for_reload);
+    info!(
+        "reload_skill_views: started config_path={}",
+        state.config_path_for_reload
+    );
     let config = AppConfig::load(&state.config_path_for_reload)
         .map_err(|e| format!("reload_skill_views: load config failed: {}", e))?;
     let registry_path = config.skills.registry_path.as_deref();
@@ -178,7 +181,11 @@ pub(crate) fn reload_skill_views(state: &AppState) -> Result<ReloadSkillViewsRes
         &config.skills.skill_switches,
         &config.skills.skills_list,
     )?;
-    let registry_entries = views.registry.as_ref().map(|r| r.all_names().len()).unwrap_or(0);
+    let registry_entries = views
+        .registry
+        .as_ref()
+        .map(|r| r.all_names().len())
+        .unwrap_or(0);
     let execution_count = views.execution_skills.len();
     let planner_count = views.planner_visible.len();
 
@@ -1480,7 +1487,11 @@ async fn main() -> anyhow::Result<()> {
         error!("startup: build_skill_views failed: {}", e);
         anyhow::anyhow!(e)
     })?;
-    let registry_entries = views.registry.as_ref().map(|r| r.all_names().len()).unwrap_or(0);
+    let registry_entries = views
+        .registry
+        .as_ref()
+        .map(|r| r.all_names().len())
+        .unwrap_or(0);
     info!(
         "skills registry path={} entries={} execution_count={} planner_visible_count={}",
         config.skills.registry_path.as_deref().unwrap_or("(none)"),
@@ -2940,7 +2951,9 @@ async fn send_task_channel_message(
     text: &str,
 ) -> Result<(), String> {
     match runtime_channel_from_payload(state, payload) {
-        RuntimeChannel::Telegram => channel_send::send_telegram_message(state, task.chat_id, text).await,
+        RuntimeChannel::Telegram => {
+            channel_send::send_telegram_message(state, task.chat_id, text).await
+        }
         RuntimeChannel::Whatsapp => {
             let to = task_external_chat_id(task)
                 .or_else(|| {
@@ -3008,7 +3021,7 @@ fn resolve_whatsapp_delivery_route(state: &AppState, payload: &Value) -> Whatsap
     WhatsappDeliveryRoute::Cloud
 }
 
-/// Phase 3: 统一 skill 执行入口。按 registry.kind 分发：builtin -> 进程内；runner -> skill-runner；external -> 占位未实现。
+/// Phase 3: 统一 skill 执行入口。按 registry.kind 分发：builtin -> 进程内；runner -> skill-runner；external -> external_kind。
 async fn run_skill_with_runner(
     state: &AppState,
     task: &ClaimedTask,
@@ -3099,7 +3112,7 @@ async fn run_skill_with_runner(
 
     let mut value = match kind {
         SkillKind::External => {
-            execute_external_http_json(state, task, &skill_name, &args, &source).await?
+            execute_external_skill(state, task, &skill_name, &args, &source).await?
         }
         SkillKind::Runner => {
             let runner_name = state.runner_name_for_skill(&skill_name);
@@ -3266,6 +3279,460 @@ async fn run_skill_with_runner(
     Ok(text)
 }
 
+async fn execute_external_skill(
+    state: &AppState,
+    task: &ClaimedTask,
+    canonical_skill_name: &str,
+    args: &Value,
+    source: &str,
+) -> Result<Value, String> {
+    let reg = state
+        .get_skills_registry()
+        .ok_or_else(|| "external skill requires registry".to_string())?;
+    let config = reg
+        .external_config(canonical_skill_name)
+        .ok_or_else(|| "external skill missing external_kind in registry".to_string())?;
+    match config.kind {
+        "http_json" => {
+            execute_external_http_json(state, task, canonical_skill_name, args, source).await
+        }
+        "local_shell_recipe" => {
+            execute_external_local_shell_recipe(state, task, canonical_skill_name, args, source)
+                .await
+        }
+        "local_script" => {
+            execute_external_local_script(state, task, canonical_skill_name, args, source).await
+        }
+        "prompt_bundle" => Ok(json!({
+            "request_id": task.task_id,
+            "status": "error",
+            "text": "",
+            "error_text": format!(
+                "Imported external skill preview is registered, but runtime execution for external_kind={} is not enabled yet.",
+                config.kind
+            )
+        })),
+        other => Err(format!("external_kind not supported: {other}")),
+    }
+}
+
+fn external_reserved_arg_key(key: &str) -> bool {
+    if key.starts_with('_') {
+        return true;
+    }
+    matches!(
+        key,
+        "action"
+            | "output_dir"
+            | "response_language"
+            | "language"
+            | "confirm"
+            | "dry_run"
+            | "timeout_seconds"
+            | "source"
+            | "skill_name"
+    )
+}
+
+fn value_to_cli_string(value: &Value) -> String {
+    match value {
+        Value::String(s) => s.clone(),
+        Value::Number(n) => n.to_string(),
+        Value::Bool(b) => b.to_string(),
+        Value::Null => "null".to_string(),
+        other => other.to_string(),
+    }
+}
+
+fn build_external_cli_args(args: &Value) -> Vec<String> {
+    if let Some(cli_args) = args.get("cli_args").and_then(|v| v.as_array()) {
+        let collected: Vec<String> = cli_args
+            .iter()
+            .filter_map(|value| value.as_str().map(|s| s.trim().to_string()))
+            .filter(|s| !s.is_empty())
+            .collect();
+        if !collected.is_empty() {
+            return collected;
+        }
+    }
+
+    for key in ["command", "script", "recipe"] {
+        if let Some(raw) = args.get(key).and_then(|v| v.as_str()) {
+            let collected = raw
+                .split_whitespace()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_string())
+                .collect::<Vec<_>>();
+            if !collected.is_empty() {
+                return collected;
+            }
+        }
+    }
+
+    let Some(map) = args.as_object() else {
+        return Vec::new();
+    };
+
+    let mut cli_args = Vec::new();
+    for (key, value) in map {
+        if external_reserved_arg_key(key) || key == "cli_args" {
+            continue;
+        }
+        let flag = format!("--{}", key.replace('_', "-"));
+        match value {
+            Value::Bool(true) => cli_args.push(flag),
+            Value::Bool(false) | Value::Null => {}
+            Value::Array(items) => {
+                for item in items {
+                    cli_args.push(flag.clone());
+                    cli_args.push(value_to_cli_string(item));
+                }
+            }
+            other => {
+                cli_args.push(flag);
+                cli_args.push(value_to_cli_string(other));
+            }
+        }
+    }
+    cli_args
+}
+
+fn resolve_external_bundle_dir(state: &AppState, bundle_rel: &str) -> Result<PathBuf, String> {
+    if bundle_rel.trim().is_empty() {
+        return Err("external skill missing external_bundle_dir".to_string());
+    }
+    let joined = state.workspace_root.join(bundle_rel);
+    let canonical = joined
+        .canonicalize()
+        .map_err(|err| format!("external bundle directory not found: {err}"))?;
+    if !canonical.starts_with(&state.workspace_root) {
+        return Err("external bundle directory must stay inside workspace_root".to_string());
+    }
+    Ok(canonical)
+}
+
+fn resolve_external_entry_path(bundle_dir: &Path, entry_rel: &str) -> Result<PathBuf, String> {
+    if entry_rel.trim().is_empty() {
+        return Err("external skill missing external_entry_file".to_string());
+    }
+    let entry_path = bundle_dir.join(entry_rel);
+    let canonical = entry_path
+        .canonicalize()
+        .map_err(|err| format!("external entry file not found: {err}"))?;
+    if !canonical.starts_with(bundle_dir) {
+        return Err("external entry file must stay inside the imported bundle".to_string());
+    }
+    Ok(canonical)
+}
+
+fn is_bin_available(bin: &str) -> bool {
+    let bin = bin.trim();
+    if bin.is_empty() {
+        return false;
+    }
+    if bin.contains('/') {
+        return Path::new(bin).is_file();
+    }
+    let Some(path_env) = std::env::var_os("PATH") else {
+        return false;
+    };
+    std::env::split_paths(&path_env).any(|dir| dir.join(bin).is_file())
+}
+
+async fn verify_external_python_modules(
+    runtime: &str,
+    modules: &[String],
+    bundle_dir: &Path,
+) -> Result<(), String> {
+    if modules.is_empty() {
+        return Ok(());
+    }
+    let imports = modules.join(",");
+    let mut cmd = Command::new(runtime);
+    cmd.arg("-c")
+        .arg(format!("import {imports}"))
+        .current_dir(bundle_dir)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    let output = tokio::time::timeout(Duration::from_secs(10), cmd.output())
+        .await
+        .map_err(|_| "checking Python dependencies timed out".to_string())?
+        .map_err(|err| format!("checking Python dependencies failed: {err}"))?;
+    if output.status.success() {
+        return Ok(());
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let detail = if !stderr.is_empty() { stderr } else { stdout };
+    Err(format!(
+        "missing Python dependencies for imported skill: {}{}",
+        modules.join(", "),
+        if detail.is_empty() {
+            String::new()
+        } else {
+            format!(" ({detail})")
+        }
+    ))
+}
+
+async fn execute_external_local_script(
+    state: &AppState,
+    task: &ClaimedTask,
+    canonical_skill_name: &str,
+    args: &Value,
+    source: &str,
+) -> Result<Value, String> {
+    let reg = state
+        .get_skills_registry()
+        .ok_or_else(|| "external skill requires registry".to_string())?;
+    let config = reg
+        .external_config(canonical_skill_name)
+        .ok_or_else(|| "external skill missing execution config".to_string())?;
+    if config.kind != "local_script" {
+        return Err(format!(
+            "external_kind not supported by local_script executor: {}",
+            config.kind
+        ));
+    }
+
+    for bin in config.require_bins {
+        if !is_bin_available(bin) {
+            return Err(format!(
+                "missing required local command for imported skill: {}",
+                bin
+            ));
+        }
+    }
+
+    let bundle_dir =
+        resolve_external_bundle_dir(state, config.bundle_dir.unwrap_or_default())?;
+    let entry_rel = config
+        .entry_file
+        .ok_or_else(|| "external skill missing external_entry_file".to_string())?;
+    let entry_path = resolve_external_entry_path(&bundle_dir, entry_rel)?;
+    let runtime = config
+        .runtime
+        .map(str::to_string)
+        .or_else(|| {
+            if entry_rel.ends_with(".py") {
+                Some("python3".to_string())
+            } else if entry_rel.ends_with(".js")
+                || entry_rel.ends_with(".mjs")
+                || entry_rel.ends_with(".cjs")
+            {
+                Some("node".to_string())
+            } else {
+                None
+            }
+        })
+        .ok_or_else(|| "external skill missing external_runtime".to_string())?;
+
+    if runtime.starts_with("python") {
+        verify_external_python_modules(&runtime, config.require_py_modules, &bundle_dir).await?;
+    }
+
+    let cli_args = build_external_cli_args(args);
+    info!(
+        "skill_dispatch external skill={} external_kind=local_script runtime={} entry={} cli_args={:?} source={}",
+        canonical_skill_name,
+        runtime,
+        entry_rel,
+        cli_args,
+        source
+    );
+
+    let timeout_secs = config
+        .timeout_seconds
+        .unwrap_or(state.skill_timeout_seconds)
+        .max(1);
+    let entry_arg = entry_path
+        .strip_prefix(&bundle_dir)
+        .unwrap_or(&entry_path)
+        .to_string_lossy()
+        .to_string();
+
+    let mut cmd = Command::new(&runtime);
+    cmd.arg(&entry_arg);
+    for arg in &cli_args {
+        cmd.arg(arg);
+    }
+    cmd.current_dir(&bundle_dir)
+        .env("WORKSPACE_ROOT", state.workspace_root.display().to_string())
+        .env("RUSTCLAW_IMPORTED_SKILL", canonical_skill_name)
+        .env("RUSTCLAW_TASK_ID", task.task_id.clone())
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+
+    let output = tokio::time::timeout(Duration::from_secs(timeout_secs), cmd.output())
+        .await
+        .map_err(|_| {
+            format!(
+                "imported external skill timed out after {}s",
+                timeout_secs
+            )
+        })?
+        .map_err(|err| format!("run imported external skill failed: {err}"))?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+
+    if output.status.success() {
+        let text = if !stdout.is_empty() && !stderr.is_empty() {
+            format!("{stdout}\n\n{stderr}")
+        } else if !stdout.is_empty() {
+            stdout
+        } else if !stderr.is_empty() {
+            stderr
+        } else {
+            "Imported external skill completed with no output.".to_string()
+        };
+        return Ok(json!({
+            "request_id": task.task_id,
+            "status": "ok",
+            "text": text,
+            "error_text": Value::Null,
+            "extra": {
+                "external_kind": config.kind,
+                "runtime": runtime,
+                "entry_file": entry_rel,
+                "cli_args": cli_args,
+            }
+        }));
+    }
+
+    let exit_code = output.status.code().unwrap_or(-1);
+    let mut detail = String::new();
+    if !stderr.is_empty() {
+        detail.push_str(&stderr);
+    }
+    if !stdout.is_empty() {
+        if !detail.is_empty() {
+            detail.push_str("\n\n");
+        }
+        detail.push_str(&stdout);
+    }
+    if detail.is_empty() {
+        detail = format!("process exited with code {}", exit_code);
+    }
+
+    Ok(json!({
+        "request_id": task.task_id,
+        "status": "error",
+        "text": "",
+        "error_text": format!("Imported external skill failed (exit={}): {}", exit_code, detail),
+        "extra": {
+            "external_kind": config.kind,
+            "runtime": runtime,
+            "entry_file": entry_rel,
+            "cli_args": cli_args,
+        }
+    }))
+}
+
+fn extract_external_shell_command(args: &Value) -> Result<String, String> {
+    if let Some(command) = args.get("command").and_then(|v| v.as_str()) {
+        let trimmed = command.trim();
+        if !trimmed.is_empty() {
+            return Ok(trimmed.to_string());
+        }
+    }
+    if let Some(command) = args.get("script").and_then(|v| v.as_str()) {
+        let trimmed = command.trim();
+        if !trimmed.is_empty() {
+            return Ok(trimmed.to_string());
+        }
+    }
+    if let Some(command) = args.get("recipe").and_then(|v| v.as_str()) {
+        let trimmed = command.trim();
+        if !trimmed.is_empty() {
+            return Ok(trimmed.to_string());
+        }
+    }
+    Err(
+        "Imported shell skill needs a command string in args.command (or args.script / args.recipe)."
+            .to_string(),
+    )
+}
+
+async fn execute_external_local_shell_recipe(
+    state: &AppState,
+    task: &ClaimedTask,
+    canonical_skill_name: &str,
+    args: &Value,
+    source: &str,
+) -> Result<Value, String> {
+    let reg = state
+        .get_skills_registry()
+        .ok_or_else(|| "external skill requires registry".to_string())?;
+    let config = reg
+        .external_config(canonical_skill_name)
+        .ok_or_else(|| "external skill missing execution config".to_string())?;
+    if config.kind != "local_shell_recipe" {
+        return Err(format!(
+            "external_kind not supported by local_shell_recipe executor: {}",
+            config.kind
+        ));
+    }
+
+    for bin in config.require_bins {
+        if !is_bin_available(bin) {
+            return Err(format!(
+                "missing required local command for imported skill: {}",
+                bin
+            ));
+        }
+    }
+
+    let bundle_dir =
+        resolve_external_bundle_dir(state, config.bundle_dir.unwrap_or_default())?;
+    let command = extract_external_shell_command(args)?;
+    let timeout_secs = config
+        .timeout_seconds
+        .unwrap_or(state.cmd_timeout_seconds)
+        .max(1);
+
+    info!(
+        "skill_dispatch external skill={} external_kind=local_shell_recipe command={} source={}",
+        canonical_skill_name,
+        truncate_for_log(&command),
+        source
+    );
+
+    match run_safe_command(
+        &bundle_dir,
+        &command,
+        state.max_cmd_length,
+        timeout_secs,
+        state.allow_sudo,
+    )
+    .await
+    {
+        Ok(text) => Ok(json!({
+            "request_id": task.task_id,
+            "status": "ok",
+            "text": text,
+            "error_text": Value::Null,
+            "extra": {
+                "external_kind": config.kind,
+                "command": command,
+            }
+        })),
+        Err(err) => Ok(json!({
+            "request_id": task.task_id,
+            "status": "error",
+            "text": "",
+            "error_text": format!("Imported shell skill failed: {err}"),
+            "extra": {
+                "external_kind": config.kind,
+                "command": command,
+            }
+        })),
+    }
+}
+
 fn extract_skill_provider_model(value: &Value) -> Option<(String, String, String)> {
     let extra = value.get("extra")?.as_object()?;
     let provider = extra
@@ -3296,9 +3763,7 @@ fn extract_skill_provider_model(value: &Value) -> Option<(String, String, String
 /// 约定：`env:VAR` → 从环境变量 VAR 取值，注入 `Authorization: Bearer <value>`；
 ///       `env:VAR:header:HeaderName` → 从环境变量 VAR 取值，注入 `HeaderName: <value>`（不加重 Bearer 前缀）。
 /// 返回 (header_name, header_value)；取不到 secret 时返回 Err。
-fn resolve_external_auth(
-    auth_ref: Option<&str>,
-) -> Result<Option<(String, String)>, String> {
+fn resolve_external_auth(auth_ref: Option<&str>) -> Result<Option<(String, String)>, String> {
     let s = match auth_ref {
         Some(x) => x.trim(),
         None => return Ok(None),
@@ -3379,9 +3844,8 @@ async fn execute_external_http_json(
     let reg = state
         .get_skills_registry()
         .ok_or_else(|| "external skill requires registry".to_string())?;
-    let config: ExternalSkillConfig<'_> = reg
-        .external_config(canonical_skill_name)
-        .ok_or_else(|| {
+    let config: ExternalSkillConfig<'_> =
+        reg.external_config(canonical_skill_name).ok_or_else(|| {
             "external skill missing external_kind or external_endpoint in registry".to_string()
         })?;
     if config.kind != "http_json" {
@@ -3394,7 +3858,10 @@ async fn execute_external_http_json(
         .timeout_seconds
         .unwrap_or(state.skill_timeout_seconds)
         .max(1);
-    let endpoint_masked = mask_endpoint_for_log(config.endpoint);
+    let endpoint = config
+        .endpoint
+        .ok_or_else(|| "external http_json skill missing external_endpoint".to_string())?;
+    let endpoint_masked = mask_endpoint_for_log(endpoint);
 
     let auth_header = match resolve_external_auth(config.auth_ref) {
         Ok(Some((name, value))) => {
@@ -3430,25 +3897,28 @@ async fn execute_external_http_json(
     let timeout = Duration::from_secs(timeout_secs);
     let mut req = state
         .http_client
-        .post(config.endpoint)
+        .post(endpoint)
         .json(&body)
         .timeout(timeout);
     if let Some((name, value)) = auth_header {
         req = req.header(name.as_str(), value);
     }
-    let res = req
-        .send()
-        .await
-        .map_err(|e| {
-            let msg = format!("external http_json request failed: {}", e);
-            warn!("skill_dispatch external request failed skill={} endpoint={} err={}", canonical_skill_name, endpoint_masked, e);
-            msg
-        })?;
+    let res = req.send().await.map_err(|e| {
+        let msg = format!("external http_json request failed: {}", e);
+        warn!(
+            "skill_dispatch external request failed skill={} endpoint={} err={}",
+            canonical_skill_name, endpoint_masked, e
+        );
+        msg
+    })?;
 
     let status_code = res.status();
     let resp_body = res.text().await.map_err(|e| {
         let msg = format!("external http_json read body failed: {}", e);
-        warn!("skill_dispatch external read_body failed skill={} err={}", canonical_skill_name, e);
+        warn!(
+            "skill_dispatch external read_body failed skill={} err={}",
+            canonical_skill_name, e
+        );
         msg
     })?;
 
@@ -3471,7 +3941,9 @@ async fn execute_external_http_json(
         let msg = format!("external http_json response parse failed: {}", e);
         warn!(
             "skill_dispatch external response parse failed skill={} err={} raw_len={}",
-            canonical_skill_name, e, resp_body.len()
+            canonical_skill_name,
+            e,
+            resp_body.len()
         );
         msg
     })?;
@@ -3534,7 +4006,9 @@ async fn execute_external_http_json(
 
     info!(
         "skill_dispatch external response_parse_ok skill={} status={} text_len={}",
-        canonical_skill_name, status, text.len()
+        canonical_skill_name,
+        status,
+        text.len()
     );
 
     let error_text = if ok {
@@ -4426,11 +4900,7 @@ async fn execute_ask_routed(
     normalizer_mode: Option<RoutedMode>,
 ) -> Result<AskReply, String> {
     let (routed_mode, used_fallback_router, override_reason) = if resume_force_chat {
-        (
-            RoutedMode::Chat,
-            false,
-            Some("resume_force_chat"),
-        )
+        (RoutedMode::Chat, false, Some("resume_force_chat"))
     } else if let Some(m) = normalizer_mode {
         // Normalizer already decided; respect it so Feishu/any client explicit-execute (e.g. "执行ls") gets Act.
         (m, false, None)
@@ -4438,7 +4908,11 @@ async fn execute_ask_routed(
         let mode = intent_router::route_request_mode(state, task, resolved_prompt).await;
         (mode, true, None)
     } else {
-        (RoutedMode::Chat, false, Some("normalizer_mode=None and agent_mode=false"))
+        (
+            RoutedMode::Chat,
+            false,
+            Some("normalizer_mode=None and agent_mode=false"),
+        )
     };
     info!(
         "{} worker_once: ask task_id={} normalizer_mode={:?} routed_mode={:?} agent_mode={} used_fallback_router={} override={}",
@@ -4481,20 +4955,19 @@ async fn execute_ask_routed(
             .map(|s| AskReply::llm(s))
             .map_err(|e| e.to_string())
         }
-        RoutedMode::Act => agent_engine::run_agent_with_tools(
-            state,
-            task,
-            prompt_with_memory,
-            resolved_prompt,
-        )
-        .await,
-        RoutedMode::ChatAct => agent_engine::run_agent_with_tools(
-            state,
-            task,
-            &chat_act_goal_from_prompt(prompt_with_memory),
-            resolved_prompt,
-        )
-        .await,
+        RoutedMode::Act => {
+            agent_engine::run_agent_with_tools(state, task, prompt_with_memory, resolved_prompt)
+                .await
+        }
+        RoutedMode::ChatAct => {
+            agent_engine::run_agent_with_tools(
+                state,
+                task,
+                &chat_act_goal_from_prompt(prompt_with_memory),
+                resolved_prompt,
+            )
+            .await
+        }
         RoutedMode::AskClarify => {
             let clarify = intent_router::generate_clarify_question(
                 state,
@@ -5353,10 +5826,12 @@ async fn execute_builtin_skill(
                 state.allow_path_outside_workspace,
             )?;
             if real_path.is_dir() {
-                return Err("remove_file only supports files; use run_cmd for directory removal".to_string());
+                return Err(
+                    "remove_file only supports files; use run_cmd for directory removal"
+                        .to_string(),
+                );
             }
-            std::fs::remove_file(&real_path)
-                .map_err(|err| format!("remove_file failed: {err}"))?;
+            std::fs::remove_file(&real_path).map_err(|err| format!("remove_file failed: {err}"))?;
             Ok(format!("removed {}", real_path.display()))
         }
         _ => Err(format!("unknown skill: {skill_name}")),
@@ -6994,10 +7469,7 @@ fn process_name_matches(pid: &str, process_name: &str) -> bool {
     // 1) 优先：/proc/<pid>/exe 的 basename（真实可执行文件）
     let exe_path = format!("/proc/{pid}/exe");
     if let Ok(target) = std::fs::read_link(&exe_path) {
-        let name = target
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("");
+        let name = target.file_name().and_then(|n| n.to_str()).unwrap_or("");
         let name = name.strip_suffix(" (deleted)").unwrap_or(name);
         if name == process_name {
             return true;
