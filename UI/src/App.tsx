@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   AlertCircle,
   BellRing,
@@ -39,12 +39,19 @@ interface HealthResponse {
   telegramd_healthy?: boolean | null;
   telegramd_process_count?: number | null;
   telegramd_memory_rss_bytes?: number | null;
+  channel_gateway_healthy?: boolean | null;
+  channel_gateway_process_count?: number | null;
+  channel_gateway_memory_rss_bytes?: number | null;
   whatsappd_healthy?: boolean | null;
   whatsappd_process_count?: number | null;
   whatsappd_memory_rss_bytes?: number | null;
   telegram_bot_healthy?: boolean | null;
   telegram_bot_process_count?: number | null;
   telegram_bot_memory_rss_bytes?: number | null;
+  telegram_configured_bot_count?: number;
+  telegram_configured_bot_names?: string[];
+  telegram_bot_statuses?: TelegramBotRuntimeStatus[];
+  gateway_instance_statuses?: GatewayInstanceRuntimeStatus[];
   whatsapp_cloud_healthy?: boolean | null;
   whatsapp_cloud_process_count?: number | null;
   whatsapp_cloud_memory_rss_bytes?: number | null;
@@ -62,11 +69,136 @@ interface HealthResponse {
   future_adapters_enabled?: string[];
 }
 
+interface TelegramBotRuntimeStatus {
+  name: string;
+  healthy: boolean;
+  status: string;
+  last_heartbeat_ts?: number | null;
+  last_error?: string | null;
+}
+
+interface GatewayInstanceRuntimeStatus {
+  kind: string;
+  name: string;
+  scope: string;
+  healthy: boolean;
+  status: string;
+  last_heartbeat_ts?: number | null;
+  last_error?: string | null;
+}
+
 interface TaskQueryResponse {
   task_id: string;
   status: "queued" | "running" | "succeeded" | "failed" | "canceled" | "timeout";
   result_json?: unknown | null;
   error_text?: string | null;
+}
+
+interface DebugUsageSnapshot {
+  prompt_tokens?: number | null;
+  completion_tokens?: number | null;
+  total_tokens?: number | null;
+  input_tokens?: number | null;
+  output_tokens?: number | null;
+  reasoning_tokens?: number | null;
+  cached_tokens?: number | null;
+  cache_creation_input_tokens?: number | null;
+  cache_read_input_tokens?: number | null;
+}
+
+interface TaskDebugEntry {
+  ts?: number | null;
+  task_id?: string | null;
+  vendor?: string | null;
+  provider?: string | null;
+  provider_type?: string | null;
+  model?: string | null;
+  model_kind?: string | null;
+  status?: string | null;
+  prompt_file?: string | null;
+  prompt?: string | null;
+  request_payload?: unknown | null;
+  response?: string | null;
+  raw_response?: string | null;
+  clean_response?: string | null;
+  sanitized?: boolean | null;
+  error?: string | null;
+  usage?: DebugUsageSnapshot | null;
+}
+
+interface TaskDebugResponse {
+  task_id: string;
+  entries: TaskDebugEntry[];
+}
+
+interface UsageHistoryStats {
+  total_requests: number;
+  success_requests: number;
+  failed_requests: number;
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+}
+
+interface UsageHistoryRecord {
+  record_id: string;
+  task_id: string;
+  ts?: number | null;
+  channel?: string | null;
+  kind?: string | null;
+  task_status?: string | null;
+  telegram_bot_name?: string | null;
+  external_user_id?: string | null;
+  external_chat_id?: string | null;
+  request_text?: string | null;
+  vendor?: string | null;
+  provider?: string | null;
+  provider_type?: string | null;
+  model?: string | null;
+  model_kind?: string | null;
+  prompt_file?: string | null;
+  prompt_tokens?: number | null;
+  completion_tokens?: number | null;
+  total_tokens?: number | null;
+  llm_call_count: number;
+  status?: string | null;
+  error?: string | null;
+}
+
+interface UsageHistoryChainEntry {
+  ts?: number | null;
+  vendor?: string | null;
+  provider?: string | null;
+  provider_type?: string | null;
+  model?: string | null;
+  model_kind?: string | null;
+  status?: string | null;
+  prompt_file?: string | null;
+  prompt?: string | null;
+  request_payload?: unknown | null;
+  raw_response?: string | null;
+  clean_response?: string | null;
+  error?: string | null;
+  prompt_tokens?: number | null;
+  completion_tokens?: number | null;
+  total_tokens?: number | null;
+}
+
+interface UsageHistoryRecordDetail extends UsageHistoryRecord {
+  entries: UsageHistoryChainEntry[];
+}
+
+interface UsageHistoryResponse {
+  stats: UsageHistoryStats;
+  records: UsageHistoryRecord[];
+  pagination: UsageHistoryPagination;
+}
+
+interface UsageHistoryPagination {
+  page: number;
+  page_size: number;
+  total_records: number;
+  total_pages: number;
 }
 
 interface SubmitTaskResponse {
@@ -81,11 +213,6 @@ interface LocalInteractionContextResponse {
 
 interface AuthIdentityResponse extends LocalInteractionContextResponse {
   user_key: string;
-}
-
-interface ResolveChannelBindingResponse {
-  bound: boolean;
-  identity?: AuthIdentityResponse | null;
 }
 
 interface SkillsResponse {
@@ -145,6 +272,48 @@ interface LlmConfigResponse {
   restart_required: boolean;
 }
 
+interface TelegramBotConfigEntry {
+  channel?: RobotChannelType;
+  name: string;
+  bot_token: string;
+  agent_id?: string;
+  admins?: number[];
+  allowlist?: number[];
+  access_mode?: "public" | "specified";
+  allowed_telegram_usernames?: string[];
+  is_primary?: boolean;
+  role_name?: string;
+  description?: string;
+  persona_prompt?: string;
+  preferred_vendor?: string | null;
+  preferred_model?: string | null;
+  allowed_skills?: string[];
+}
+
+interface AgentConfigEntry {
+  id: string;
+  name: string;
+  description?: string;
+  persona_prompt?: string;
+  preferred_vendor?: string | null;
+  preferred_model?: string | null;
+  allowed_skills?: string[];
+}
+
+interface AgentLlmOption {
+  vendor: string;
+  label: string;
+  models: string[];
+  defaultModel: string;
+}
+
+interface TelegramConfigResponse {
+  config_path: string;
+  bots: TelegramBotConfigEntry[];
+  agents: AgentConfigEntry[];
+  restart_required: boolean;
+}
+
 interface LogLatestResponse {
   file: string;
   lines: number;
@@ -173,19 +342,10 @@ type BrowserFileWithPath = File & {
 interface AdapterHealthRow {
   key: string;
   label: string;
-  serviceName: "telegramd" | "whatsappd" | "whatsapp_webd" | "feishud" | "larkd";
+  serviceName: "channel-gateway" | "telegramd" | "whatsappd" | "whatsapp_webd" | "feishud" | "larkd";
   healthy: boolean | null | undefined;
   processCount: number | null | undefined;
   memoryRssBytes: number | null | undefined;
-}
-
-interface ChannelPreset {
-  summary: string;
-  userHint: string;
-  chatHint: string;
-  exampleUser: string;
-  exampleChat: string;
-  note: string;
 }
 
 interface ServiceStatusRow extends AdapterHealthRow {
@@ -195,9 +355,11 @@ interface ServiceStatusRow extends AdapterHealthRow {
 }
 
 type ChannelName = "telegram" | "whatsapp" | "ui" | "feishu" | "lark";
-type ConsolePage = "dashboard" | "services" | "channels" | "models" | "skills" | "chat" | "logs" | "tasks";
+type RobotChannelType = "telegram" | "feishu" | "wechat";
+type TelegramAccessMode = "public" | "specified";
+type ConsolePage = "dashboard" | "services" | "channels" | "models" | "skills" | "chat" | "usage" | "logs" | "tasks";
 type ThemeMode = "dark" | "light";
-const CONSOLE_PAGES: ConsolePage[] = ["dashboard", "services", "channels", "models", "skills", "chat", "logs", "tasks"];
+const CONSOLE_PAGES: ConsolePage[] = ["dashboard", "channels", "models", "skills", "chat", "usage", "logs", "tasks"];
 
 const UI_HIDDEN_SKILLS = new Set<string>(["chat"]);
 /** 基本技能（与后端 base_skill_names 一致，由 tool 转换），API 未返回时用此兜底 */
@@ -292,6 +454,23 @@ function toLocalTime(ts: number): string {
   return new Date(ts).toLocaleTimeString();
 }
 
+function toLocalDateTime(ts: number): string {
+  return new Date(ts).toLocaleString();
+}
+
+function formatInteger(value?: number | null, locale = "zh-CN"): string {
+  if (value == null || Number.isNaN(value)) return "--";
+  return new Intl.NumberFormat(locale).format(value);
+}
+
+function formatCompactInteger(value?: number | null, locale = "zh-CN"): string {
+  if (value == null || Number.isNaN(value)) return "--";
+  return new Intl.NumberFormat(locale, {
+    notation: "compact",
+    maximumFractionDigits: value >= 100000 ? 1 : 0,
+  }).format(value);
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
@@ -314,6 +493,120 @@ function extractTaskText(result: TaskQueryResponse): string {
     return result.error_text;
   }
   return JSON.stringify(result.result_json ?? null, null, 2);
+}
+
+function parseNestedStructuredString(value: string): unknown {
+  const trimmed = value.trim();
+  if (!trimmed) return value;
+  if (!["{", "["].includes(trimmed[0])) return value;
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    return value;
+  }
+}
+
+function StructuredDebugValue({
+  value,
+  depth = 0,
+}: {
+  value: unknown;
+  depth?: number;
+}) {
+  if (typeof value === "string") {
+    const parsed = parseNestedStructuredString(value);
+    if (parsed !== value) {
+      return <StructuredDebugValue value={parsed} depth={depth} />;
+    }
+    return <div className="whitespace-pre-wrap break-words text-white/80">{value || "--"}</div>;
+  }
+
+  if (value == null) {
+    return <span className="text-white/40">null</span>;
+  }
+
+  if (typeof value === "number" || typeof value === "boolean") {
+    return <span className="text-sky-200">{String(value)}</span>;
+  }
+
+  if (Array.isArray(value)) {
+    if (value.length === 0) {
+      return <span className="text-white/40">[]</span>;
+    }
+    return (
+      <div className="space-y-2">
+        {value.map((item, index) => (
+          <div key={`${depth}-${index}`} className="flex items-start gap-3 rounded-xl border border-white/6 bg-white/[0.03] px-3 py-2">
+            <span className="mt-0.5 min-w-5 text-[11px] font-medium text-white/35">{index}</span>
+            <div className="min-w-0 flex-1">
+              <StructuredDebugValue value={item} depth={depth + 1} />
+            </div>
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  if (typeof value === "object") {
+    const entries = Object.entries(value as Record<string, unknown>);
+    if (entries.length === 0) {
+      return <span className="text-white/40">{"{}"}</span>;
+    }
+    return (
+      <div className="space-y-2">
+        {entries.map(([key, entryValue]) => (
+          <div key={`${depth}-${key}`} className="rounded-xl border border-white/6 bg-white/[0.03] px-3 py-2">
+            <div className="text-[11px] uppercase tracking-widest text-white/38">{key}</div>
+            <div className="mt-1 min-w-0 text-xs leading-6">
+              <StructuredDebugValue value={entryValue} depth={depth + 1} />
+            </div>
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  return <div className="whitespace-pre-wrap break-words text-white/80">{String(value)}</div>;
+}
+
+function DebugPayloadPanel({
+  title,
+  value,
+  defaultOpen = false,
+  formatLabel,
+  rawLabel,
+}: {
+  title: string;
+  value: unknown;
+  defaultOpen?: boolean;
+  formatLabel: string;
+  rawLabel: string;
+}) {
+  const [formatted, setFormatted] = useState(false);
+
+  return (
+    <details className="rounded-xl border border-white/10 bg-black/20 p-3" open={defaultOpen}>
+      <summary className="cursor-pointer text-sm font-medium text-white/85">{title}</summary>
+      <div className="mt-3 flex justify-end">
+        <button
+          type="button"
+          onClick={() => setFormatted((current) => !current)}
+          className="rounded-full border border-white/10 bg-white/6 px-3 py-1 text-[11px] font-medium text-white/72 transition hover:bg-white/10"
+        >
+          {formatted ? rawLabel : formatLabel}
+        </button>
+      </div>
+      {formatted ? (
+        <div className="theme-scrollbar mt-3 max-h-72 overflow-auto rounded-xl border border-white/8 bg-white/[0.03] p-3 text-xs leading-6">
+          <StructuredDebugValue value={value ?? null} />
+        </div>
+      ) : (
+        <pre className="theme-scrollbar mt-3 max-h-72 overflow-auto whitespace-pre-wrap break-words text-xs leading-6 text-white/75">
+          {JSON.stringify(value ?? null, null, 2)}
+        </pre>
+      )}
+    </details>
+  );
 }
 
 function QuickActionCard({
@@ -369,9 +662,6 @@ export default function App() {
   const [uiAuthReady, setUiAuthReady] = useState(false);
   const [uiAuthLoading, setUiAuthLoading] = useState(false);
   const [uiAuthError, setUiAuthError] = useState<string | null>(null);
-  const [authIdentity, setAuthIdentity] = useState<AuthIdentityResponse | null>(null);
-  const [authMeLoading, setAuthMeLoading] = useState(false);
-  const [authMeError, setAuthMeError] = useState<string | null>(null);
   const [pollingSeconds, setPollingSeconds] = useState(() => {
     return readNumber(STORAGE_KEYS.polling, 5);
   });
@@ -407,6 +697,17 @@ export default function App() {
   const [llmConfigLoading, setLlmConfigLoading] = useState(false);
   const [llmConfigError, setLlmConfigError] = useState<string | null>(null);
   const [llmConfigData, setLlmConfigData] = useState<LlmConfigResponse | null>(null);
+  const [telegramConfigLoading, setTelegramConfigLoading] = useState(false);
+  const [telegramConfigError, setTelegramConfigError] = useState<string | null>(null);
+  const [telegramConfigData, setTelegramConfigData] = useState<TelegramConfigResponse | null>(null);
+  const [telegramConfigDrafts, setTelegramConfigDrafts] = useState<TelegramBotConfigEntry[]>([]);
+  const [telegramConfigSaving, setTelegramConfigSaving] = useState(false);
+  const [telegramConfigSaveMessage, setTelegramConfigSaveMessage] = useState<string | null>(null);
+  const [telegramRestartNoticeVisible, setTelegramRestartNoticeVisible] = useState(false);
+  const [botEditorOpen, setBotEditorOpen] = useState(false);
+  const [botEditorIndex, setBotEditorIndex] = useState<number | null>(null);
+  const [botEditorDraft, setBotEditorDraft] = useState<TelegramBotConfigEntry | null>(null);
+  const [botEditorUsernameInput, setBotEditorUsernameInput] = useState("");
   const [llmDraftVendor, setLlmDraftVendor] = useState("");
   const [llmDraftModel, setLlmDraftModel] = useState("");
   const [llmConfigSaving, setLlmConfigSaving] = useState(false);
@@ -416,17 +717,30 @@ export default function App() {
   const [systemRestarting, setSystemRestarting] = useState(false);
   const [systemRestartMessage, setSystemRestartMessage] = useState<string | null>(null);
 
-  const [taskId, setTaskId] = useState("");
-  const [taskLoading, setTaskLoading] = useState(false);
   const [taskResult, setTaskResult] = useState<TaskQueryResponse | null>(null);
-  const [taskError, setTaskError] = useState<string | null>(null);
   const [trackingTaskId, setTrackingTaskId] = useState<string | null>(null);
+  const [debugModeEnabled, setDebugModeEnabled] = useState(false);
+  const [taskDebugLoading, setTaskDebugLoading] = useState(false);
+  const [taskDebugError, setTaskDebugError] = useState<string | null>(null);
+  const [taskDebugData, setTaskDebugData] = useState<TaskDebugResponse | null>(null);
+  const [usageRecordsLoading, setUsageRecordsLoading] = useState(false);
+  const [usageRecordsError, setUsageRecordsError] = useState<string | null>(null);
+  const [usageRecordsData, setUsageRecordsData] = useState<UsageHistoryResponse | null>(null);
+  const [usageSearchQuery, setUsageSearchQuery] = useState("");
+  const [usageChannelFilter, setUsageChannelFilter] = useState<string>("all");
+  const [usageStatusFilter, setUsageStatusFilter] = useState<string>("all");
+  const [usagePage, setUsagePage] = useState(1);
+  const [selectedUsageRecordId, setSelectedUsageRecordId] = useState<string | null>(null);
+  const [selectedUsageRecordDetail, setSelectedUsageRecordDetail] = useState<UsageHistoryRecordDetail | null>(null);
+  const [selectedUsageRecordLoading, setSelectedUsageRecordLoading] = useState(false);
+  const [selectedUsageRecordError, setSelectedUsageRecordError] = useState<string | null>(null);
 
   const [interactionKind, setInteractionKind] = useState<"ask" | "run_skill">("ask");
   const [interactionChannel, setInteractionChannel] = useState<ChannelName>("ui");
   const [interactionExternalUserId, setInteractionExternalUserId] = useState("");
   const [interactionExternalChatId, setInteractionExternalChatId] = useState("");
   const [interactionAdapter, setInteractionAdapter] = useState("");
+  const [interactionTelegramBotName, setInteractionTelegramBotName] = useState("");
   const [interactionUserId, setInteractionUserId] = useState<number | null>(null);
   const [interactionChatId, setInteractionChatId] = useState<number | null>(null);
   const [interactionRole, setInteractionRole] = useState<string>("-");
@@ -458,16 +772,6 @@ export default function App() {
   const [waLoginError, setWaLoginError] = useState<string | null>(null);
   const [waLoginStatus, setWaLoginStatus] = useState<WhatsappWebLoginStatus | null>(null);
   const [waLogoutLoading, setWaLogoutLoading] = useState(false);
-  const [channelBindingChannel, setChannelBindingChannel] = useState<ChannelName>("telegram");
-  const [channelBindingExternalUserId, setChannelBindingExternalUserId] = useState("");
-  const [channelBindingExternalChatId, setChannelBindingExternalChatId] = useState("");
-  const [channelResolveLoading, setChannelResolveLoading] = useState(false);
-  const [channelResolveError, setChannelResolveError] = useState<string | null>(null);
-  const [channelResolveResult, setChannelResolveResult] = useState<ResolveChannelBindingResponse | null>(null);
-  const [channelBindLoading, setChannelBindLoading] = useState(false);
-  const [channelBindError, setChannelBindError] = useState<string | null>(null);
-  const [channelBindMessage, setChannelBindMessage] = useState<string | null>(null);
-  const [diagnosticsRefreshing, setDiagnosticsRefreshing] = useState(false);
   const [selectedLogFile, setSelectedLogFile] = useState("clawd.log");
   const [logTailLines, setLogTailLines] = useState(200);
   const [logLoading, setLogLoading] = useState(false);
@@ -486,19 +790,152 @@ export default function App() {
     const [zh, en] = mixed.split(" / ");
     return lang === "zh" ? zh : en ?? zh;
   };
-  const channelLabel = (channel: ChannelName) => {
-    const labels: Record<ChannelName, string> = {
-      telegram: "Telegram",
-      whatsapp: "WhatsApp",
-      ui: "UI",
-      feishu: "Feishu",
-      lark: "Lark",
-    };
-    return labels[channel];
+  const generateAgentId = () => {
+    const randomPart =
+      typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+        ? crypto.randomUUID().replace(/-/g, "").slice(0, 10)
+        : `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+    return `agent-${randomPart}`;
   };
+  const deriveStableAgentId = (seed: string, index: number) => {
+    const normalizedSeed = seed
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "");
+    return normalizedSeed ? `agent-${normalizedSeed}` : `agent-${index + 1}`;
+  };
+  const formatIdList = (values?: number[]) => (values ?? []).join(", ");
+  const parseIdList = (raw: string) =>
+    raw
+      .split(",")
+      .map((part) => part.trim())
+      .filter(Boolean)
+      .map((part) => Number(part))
+      .filter((value) => Number.isInteger(value));
+  const formatStringList = (values?: string[]) => (values ?? []).join(", ");
+  const parseStringList = (raw: string) =>
+    raw
+      .split(",")
+      .map((part) => part.trim())
+      .filter(Boolean);
+  const normalizeTelegramUsername = (value: string) => value.trim().replace(/^@+/, "").trim().toLowerCase();
+  const normalizeTelegramUsernameList = (values?: string[]) =>
+    [...new Set((values ?? []).map(normalizeTelegramUsername).filter(Boolean))];
+  const telegramAccessModeLabel = (mode?: TelegramAccessMode) =>
+    (mode || "public") === "specified"
+      ? t("指定人员", "Specified people")
+      : t("公开", "Public");
+  const isSystemDefaultAgentName = (name?: string | null) => {
+    const normalized = (name || "").trim().toLowerCase();
+    return normalized === "" || normalized === "main" || normalized === "default assistant";
+  };
+  const localizedDefaultAgentName = () => t("默认助手", "Default assistant");
+  const mergeTelegramBotsWithAgents = (bots: TelegramBotConfigEntry[], agents: AgentConfigEntry[]) => {
+    const normalizedAgents = agents.map((agent) => ({
+      ...agent,
+      id: (agent.id || "").trim() || generateAgentId(),
+      name: (agent.id || "").trim() === "main" && isSystemDefaultAgentName(agent.name) ? "" : agent.name,
+    }));
+    const agentMap = new Map(normalizedAgents.map((agent) => [agent.id, agent]));
+    const seenAgentIds = new Set<string>();
+    return bots.map((bot, index) => {
+      const isPrimary = index === 0 || bot.is_primary === true;
+      let nextAgentId = (bot.agent_id || "").trim();
+      if (isPrimary) {
+        nextAgentId = "main";
+      } else if (!nextAgentId || seenAgentIds.has(nextAgentId)) {
+        nextAgentId = deriveStableAgentId(bot.name || "", index);
+        while (seenAgentIds.has(nextAgentId)) {
+          nextAgentId = generateAgentId();
+        }
+      }
+      seenAgentIds.add(nextAgentId);
+      const agent = agentMap.get(nextAgentId);
+      return {
+        ...bot,
+        channel: "telegram" as RobotChannelType,
+        name: isPrimary ? "primary" : bot.name,
+        agent_id: nextAgentId,
+        is_primary: isPrimary,
+        access_mode: bot.access_mode || "public",
+        allowed_telegram_usernames: normalizeTelegramUsernameList(bot.allowed_telegram_usernames),
+        role_name: agent?.name || "",
+        description: agent?.description || "",
+        persona_prompt: agent?.persona_prompt || "",
+        preferred_vendor: agent?.preferred_vendor || "",
+        preferred_model: agent?.preferred_model || "",
+        allowed_skills: agent?.allowed_skills ?? [],
+      };
+    });
+  };
+  const buildAgentPayloadFromBots = (bots: TelegramBotConfigEntry[]) => {
+    const normalizedBots = bots.map((bot, index) => {
+      const isPrimary = index === 0 || bot.is_primary === true;
+      const fallbackAgentId = deriveStableAgentId(bot.name || "", index);
+      const agentId = isPrimary ? "main" : ((bot.agent_id || "").trim() || fallbackAgentId);
+      return {
+        ...bot,
+        channel: "telegram" as RobotChannelType,
+        name: isPrimary ? "primary" : bot.name.trim(),
+        agent_id: agentId,
+        is_primary: isPrimary,
+      };
+    });
+    const agents = normalizedBots.map((bot, index) => ({
+      id: index === 0 ? "main" : ((bot.agent_id || "").trim() || generateAgentId()),
+      name: bot.role_name?.trim() || (index === 0 ? "" : bot.name.trim()),
+      description: bot.description?.trim() || "",
+      persona_prompt: bot.persona_prompt?.trim() || "",
+      preferred_vendor: bot.preferred_vendor?.trim() || undefined,
+      preferred_model: bot.preferred_model?.trim() || undefined,
+      allowed_skills: bot.allowed_skills ?? [],
+    }));
+    return {
+      bots: normalizedBots.map((bot) => ({
+        name: bot.name,
+        bot_token: bot.bot_token.trim(),
+        agent_id: (bot.agent_id || "main").trim() || "main",
+        admins: bot.admins ?? [],
+        allowlist: bot.allowlist ?? [],
+        access_mode: (bot.access_mode || "public") as TelegramAccessMode,
+        allowed_telegram_usernames: normalizeTelegramUsernameList(bot.allowed_telegram_usernames),
+        is_primary: bot.is_primary,
+      })),
+      agents,
+    };
+  };
+  const createEmptyTelegramBotDraft = (): TelegramBotConfigEntry => ({
+    channel: "telegram",
+    name: "",
+    bot_token: "",
+    agent_id: generateAgentId(),
+    admins: [],
+    allowlist: [],
+    access_mode: "public",
+    allowed_telegram_usernames: [],
+    is_primary: false,
+    role_name: "",
+    description: "",
+    persona_prompt: "",
+    preferred_vendor: "",
+    preferred_model: "",
+    allowed_skills: [],
+  });
+  const robotChannelLabel = (channel?: RobotChannelType) => {
+    const labels: Record<RobotChannelType, string> = {
+      telegram: "Telegram",
+      feishu: "Feishu",
+      wechat: t("企业微信", "WeCom"),
+    };
+    return labels[channel || "telegram"];
+  };
+  const robotChannelSaveSupported = (channel?: RobotChannelType) => (channel || "telegram") === "telegram";
+  const robotDisplayName = (bot?: Pick<TelegramBotConfigEntry, "name" | "role_name"> | null) =>
+    (bot?.role_name || "").trim() || (bot?.name || "").trim();
   const serviceDisplayName = (key: AdapterHealthRow["key"]) => {
     const labels: Record<AdapterHealthRow["key"], string> = {
-      telegram_bot: t("Telegram", "Telegram"),
+      telegram_bot: t("Telegram 服务", "Telegram Service"),
       whatsapp_web: t("WhatsApp 网页版", "WhatsApp Web"),
       whatsapp_cloud: t("WhatsApp 云接口", "WhatsApp Cloud"),
       feishu_bot: t("飞书", "Feishu"),
@@ -506,52 +943,13 @@ export default function App() {
     };
     return labels[key];
   };
-  const channelPresets = useMemo<Record<ChannelName, ChannelPreset>>(
-    () => ({
-      telegram: {
-        summary: t("适合绑定 Telegram 私聊或群聊身份。", "Best for binding Telegram private chats or group identities."),
-        userHint: t("通常填写 Telegram 用户 ID。", "Usually the Telegram user ID."),
-        chatHint: t("群聊或频道场景建议补 chat_id。", "For groups or channels, provide chat_id as well."),
-        exampleUser: "123456789",
-        exampleChat: "-1001234567890",
-        note: t("如果只是单聊排查，先填 external_user_id 往往就够。", "For direct chats, starting with external_user_id is usually enough."),
-      },
-      whatsapp: {
-        summary: t("适合绑定 WhatsApp Cloud 或 Web 渠道身份。", "Best for binding WhatsApp Cloud or Web identities."),
-        userHint: t("通常填写发送方/联系人标识。", "Usually the sender or contact identifier."),
-        chatHint: t("群组或线程场景建议同时填写 external_chat_id。", "For groups or threaded chats, external_chat_id is recommended too."),
-        exampleUser: "8613800138000",
-        exampleChat: "1203630xxxxxxxxx@g.us",
-        note: t("如果同一个号码在多个会话里复用，chat_id 能减少误绑。", "If one number appears across multiple threads, chat_id helps avoid mismatches."),
-      },
-      ui: {
-        summary: t("用于本地 UI 会话身份排查。", "Useful for debugging the local UI identity."),
-        userHint: t("通常不需要额外填写 external_user_id。", "external_user_id is usually unnecessary."),
-        chatHint: t("一般也不需要 external_chat_id。", "external_chat_id is usually unnecessary too."),
-        exampleUser: "",
-        exampleChat: "",
-        note: t("这个渠道更多是验证当前 key 与本地上下文是否一致。", "This channel is mainly for verifying the current key against local context."),
-      },
-      feishu: {
-        summary: t("适合绑定飞书账号或会话。", "Best for binding Feishu identities or chats."),
-        userHint: t("通常填写飞书用户标识，如 open_id / user_id。", "Usually a Feishu user identifier such as open_id / user_id."),
-        chatHint: t("群聊或机器人会话建议同时填写 chat_id。", "For groups or bot threads, include chat_id as well."),
-        exampleUser: "ou_xxxxxxxxxxxxx",
-        exampleChat: "oc_xxxxxxxxxxxxx",
-        note: t("如果你不确定字段来源，先从日志或 webhook 事件里复制原值。", "If unsure where the fields come from, copy the raw values from logs or webhook events."),
-      },
-      lark: {
-        summary: t("适合绑定国际版 Lark 账号或会话。", "Best for binding international Lark identities or chats."),
-        userHint: t("通常填写 Lark 用户标识。", "Usually a Lark user identifier."),
-        chatHint: t("群聊场景建议补充 chat_id。", "For group chats, add chat_id as well."),
-        exampleUser: "ou_xxxxxxxxxxxxx",
-        exampleChat: "oc_xxxxxxxxxxxxx",
-        note: t("字段形状通常和飞书接近，但建议以实际事件 payload 为准。", "The field shape is often similar to Feishu, but the real event payload should be your source of truth."),
-      },
-    }),
-    [lang],
-  );
-
+  const telegramBotMonogram = (name: string) =>
+    name
+      .split(/[^a-zA-Z0-9]+/)
+      .filter(Boolean)
+      .slice(0, 2)
+      .map((part) => part[0]?.toUpperCase() ?? "")
+      .join("") || "TG";
   const isOnline = Boolean(health) && !error;
   const queuePressureHigh = (health?.queue_length ?? 0) >= queueWarn;
   const runningTooOld = (health?.running_oldest_age_seconds ?? 0) >= ageWarnSeconds;
@@ -566,39 +964,9 @@ export default function App() {
     });
 
   const applyIdentity = (identity: AuthIdentityResponse) => {
-    setAuthIdentity(identity);
     setInteractionUserId(identity.user_id);
     setInteractionChatId(identity.chat_id);
     setInteractionRole(identity.role);
-  };
-
-  const fetchAuthMe = async (silent = false) => {
-    if (!silent) {
-      setAuthMeLoading(true);
-      setAuthMeError(null);
-    }
-    try {
-      const res = await apiFetch(`/v1/auth/me`);
-      const body = (await res.json()) as ApiResponse<AuthIdentityResponse>;
-      if (!res.ok || !body.ok || !body.data) {
-        throw new Error(body.error || `auth/me 请求失败 (${res.status})`);
-      }
-      applyIdentity(body.data);
-      if (!silent) {
-        setAuthMeError(null);
-      }
-      return body.data;
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "未知错误";
-      if (!silent) {
-        setAuthMeError(message);
-      }
-      return null;
-    } finally {
-      if (!silent) {
-        setAuthMeLoading(false);
-      }
-    }
   };
 
   const verifyUiKey = async (candidate: string, persist = true) => {
@@ -611,20 +979,40 @@ export default function App() {
     setUiAuthLoading(true);
     setUiAuthError(null);
     try {
-      const res = await fetch(`${apiBase.replace(/\/$/, "")}/v1/auth/ui-key/verify`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ user_key: normalized }),
-      });
-      const body = (await res.json()) as ApiResponse<AuthIdentityResponse>;
-      if (!res.ok || !body.ok || !body.data) {
-        throw new Error(body.error || `key 校验失败 (${res.status})`);
+      let identity: AuthIdentityResponse | null = null;
+      let verifyError: string | null = null;
+
+      try {
+        const res = await fetch(`${apiBase.replace(/\/$/, "")}/v1/auth/ui-key/verify`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ user_key: normalized }),
+        });
+        const body = (await res.json()) as ApiResponse<AuthIdentityResponse>;
+        if (res.ok && body.ok && body.data) {
+          identity = body.data;
+        } else {
+          verifyError = body.error || `key 校验失败 (${res.status})`;
+        }
+      } catch (err) {
+        verifyError = err instanceof Error ? err.message : "未知错误";
       }
+
+      if (!identity) {
+        const fallbackRes = await fetch(`${apiBase.replace(/\/$/, "")}/v1/auth/me`, {
+          headers: { "X-RustClaw-Key": normalized },
+        });
+        const fallbackBody = (await fallbackRes.json()) as ApiResponse<AuthIdentityResponse>;
+        if (!fallbackRes.ok || !fallbackBody.ok || !fallbackBody.data) {
+          throw new Error(fallbackBody.error || verifyError || `key 校验失败 (${fallbackRes.status})`);
+        }
+        identity = fallbackBody.data;
+      }
+
       setUiKey(normalized);
       setUiKeyDraft(normalized);
       setUiAuthReady(true);
-      setAuthMeError(null);
-      applyIdentity(body.data);
+      applyIdentity(identity);
       if (persist) {
         window.localStorage.setItem(STORAGE_KEYS.userKey, normalized);
       }
@@ -632,7 +1020,6 @@ export default function App() {
     } catch (err) {
       setUiAuthReady(false);
       setUiKey("");
-      setAuthIdentity(null);
       setInteractionUserId(null);
       setInteractionChatId(null);
       setInteractionRole("-");
@@ -651,8 +1038,6 @@ export default function App() {
     setUiKeyDraft("");
     setUiAuthReady(false);
     setUiAuthError(null);
-    setAuthIdentity(null);
-    setAuthMeError(null);
     setInteractionUserId(null);
     setInteractionChatId(null);
     setInteractionRole("-");
@@ -677,7 +1062,7 @@ export default function App() {
   };
 
   const controlService = async (
-    serviceName: "telegramd" | "whatsappd" | "whatsapp_webd" | "feishud" | "larkd",
+    serviceName: "channel-gateway" | "telegramd" | "whatsappd" | "whatsapp_webd" | "feishud" | "larkd",
     action: "start" | "stop" | "restart",
   ) => {
     setServiceActionMessage(null);
@@ -775,101 +1160,6 @@ export default function App() {
     }
   };
 
-  const resolveChannelBinding = async () => {
-    setChannelResolveLoading(true);
-    setChannelResolveError(null);
-    setChannelBindMessage(null);
-    try {
-      const body: Record<string, unknown> = {
-        channel: channelBindingChannel,
-      };
-      const externalUserId = channelBindingExternalUserId.trim();
-      const externalChatId = channelBindingExternalChatId.trim();
-      if (externalUserId) {
-        body.external_user_id = externalUserId;
-      }
-      if (externalChatId) {
-        body.external_chat_id = externalChatId;
-      }
-      const res = await apiFetch(`/v1/auth/channel/resolve`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      const resp = (await res.json()) as ApiResponse<ResolveChannelBindingResponse>;
-      if (!res.ok || !resp.ok || !resp.data) {
-        throw new Error(resp.error || `渠道绑定查询失败 (${res.status})`);
-      }
-      setChannelResolveResult(resp.data);
-      return resp.data;
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "未知错误";
-      setChannelResolveError(message);
-      return null;
-    } finally {
-      setChannelResolveLoading(false);
-    }
-  };
-
-  const bindChannelToCurrentKey = async () => {
-    setChannelBindLoading(true);
-    setChannelBindError(null);
-    setChannelBindMessage(null);
-    try {
-      const body: Record<string, unknown> = {
-        channel: channelBindingChannel,
-        user_key: uiKey,
-      };
-      const externalUserId = channelBindingExternalUserId.trim();
-      const externalChatId = channelBindingExternalChatId.trim();
-      if (externalUserId) {
-        body.external_user_id = externalUserId;
-      }
-      if (externalChatId) {
-        body.external_chat_id = externalChatId;
-      }
-      const res = await apiFetch(`/v1/auth/channel/bind`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      const resp = (await res.json()) as ApiResponse<AuthIdentityResponse>;
-      if (!res.ok || !resp.ok || !resp.data) {
-        throw new Error(resp.error || `渠道绑定失败 (${res.status})`);
-      }
-      setChannelResolveResult({ bound: true, identity: resp.data });
-      setChannelBindMessage(
-        t(
-          `绑定成功：${channelLabel(channelBindingChannel)} 已绑定到当前 key`,
-          `${channelLabel(channelBindingChannel)} has been bound to the current key`,
-        ),
-      );
-      applyIdentity(resp.data);
-      await fetchHealth();
-      return resp.data;
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "未知错误";
-      setChannelBindError(message);
-      return null;
-    } finally {
-      setChannelBindLoading(false);
-    }
-  };
-
-  const refreshDiagnostics = async () => {
-    setDiagnosticsRefreshing(true);
-    try {
-      await Promise.all([
-        fetchHealth(),
-        fetchLocalInteractionContext(),
-        fetchAuthMe(),
-        fetchWhatsappWebLoginStatus(true),
-      ]);
-    } finally {
-      setDiagnosticsRefreshing(false);
-    }
-  };
-
   const fetchSkills = async () => {
     setSkillsLoading(true);
     setSkillsError(null);
@@ -928,6 +1218,230 @@ export default function App() {
     } finally {
       setLlmConfigLoading(false);
     }
+  };
+
+  const fetchTelegramConfig = async () => {
+    setTelegramConfigLoading(true);
+    setTelegramConfigError(null);
+    try {
+      const res = await apiFetch(`/v1/telegram/config`);
+      const body = (await res.json()) as ApiResponse<TelegramConfigResponse>;
+      if (!res.ok || !body.ok || !body.data) {
+        throw new Error(body.error || `Telegram 配置获取失败 (${res.status})`);
+      }
+      setTelegramConfigData(body.data);
+      setTelegramConfigDrafts(mergeTelegramBotsWithAgents(body.data.bots ?? [], body.data.agents ?? []));
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "未知错误";
+      setTelegramConfigError(message);
+    } finally {
+      setTelegramConfigLoading(false);
+    }
+  };
+
+  const updateTelegramBotDraft = (
+    index: number,
+    key:
+      | "name"
+      | "bot_token"
+      | "admins"
+      | "allowlist"
+      | "access_mode"
+      | "allowed_telegram_usernames"
+      | "role_name"
+      | "description"
+      | "persona_prompt"
+      | "preferred_vendor"
+      | "preferred_model"
+      | "allowed_skills",
+    value: string,
+  ) => {
+    setTelegramConfigDrafts((prev) =>
+      prev.map((bot, currentIndex) => {
+        if (currentIndex !== index) return bot;
+        if (key === "admins" || key === "allowlist") {
+          return { ...bot, [key]: parseIdList(value) };
+        }
+        if (key === "allowed_telegram_usernames") {
+          return { ...bot, allowed_telegram_usernames: normalizeTelegramUsernameList(parseStringList(value)) };
+        }
+        if (key === "allowed_skills") {
+          return { ...bot, allowed_skills: parseStringList(value) };
+        }
+        if (key === "preferred_vendor") {
+          const nextVendor = value.trim();
+          const vendorInfo = agentLlmOptions.find((item) => item.vendor === nextVendor);
+          return {
+            ...bot,
+            preferred_vendor: nextVendor,
+            preferred_model: nextVendor ? vendorInfo?.defaultModel || vendorInfo?.models?.[0] || "" : "",
+          };
+        }
+        return { ...bot, [key]: value };
+      }),
+    );
+  };
+
+  const updateBotEditorDraft = (
+    key:
+      | "channel"
+      | "name"
+      | "bot_token"
+      | "admins"
+      | "allowlist"
+      | "access_mode"
+      | "allowed_telegram_usernames"
+      | "role_name"
+      | "description"
+      | "persona_prompt"
+      | "preferred_vendor"
+      | "preferred_model"
+      | "allowed_skills",
+    value: string,
+  ) => {
+    setBotEditorDraft((prev) => {
+      if (!prev) return prev;
+      if (key === "name") {
+        return { ...prev, name: value, role_name: value };
+      }
+      if (key === "admins" || key === "allowlist") {
+        return { ...prev, [key]: parseIdList(value) };
+      }
+      if (key === "allowed_telegram_usernames") {
+        return { ...prev, allowed_telegram_usernames: normalizeTelegramUsernameList(parseStringList(value)) };
+      }
+      if (key === "allowed_skills") {
+        return { ...prev, allowed_skills: parseStringList(value) };
+      }
+      if (key === "preferred_vendor") {
+        const nextVendor = value.trim();
+        const vendorInfo = agentLlmOptions.find((item) => item.vendor === nextVendor);
+        return {
+          ...prev,
+          preferred_vendor: nextVendor,
+          preferred_model: nextVendor ? vendorInfo?.defaultModel || vendorInfo?.models?.[0] || "" : "",
+        };
+      }
+      return { ...prev, [key]: value };
+    });
+  };
+
+  const openAddTelegramBotEditor = () => {
+    setBotEditorIndex(null);
+    setBotEditorDraft(createEmptyTelegramBotDraft());
+    setBotEditorUsernameInput("");
+    setBotEditorOpen(true);
+    setTelegramConfigSaveMessage(null);
+  };
+
+  const applyRobotPersonaPreset = (preset: (typeof robotPersonaPresets)[number]) => {
+    setBotEditorDraft((prev) => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        description: preset.description,
+        persona_prompt: preset.personaPrompt,
+      };
+    });
+  };
+
+  const applyRobotSkillMode = (mode: "inherit" | "common" | "custom") => {
+    setBotEditorDraft((prev) => {
+      if (!prev) return prev;
+      if (mode === "inherit") {
+        return { ...prev, allowed_skills: [] };
+      }
+      if (mode === "common") {
+        return { ...prev, allowed_skills: beginnerRobotSkillPreset };
+      }
+      return { ...prev, allowed_skills: managedSkills };
+    });
+  };
+
+  const toggleBotEditorSkill = (skill: string, enabled: boolean) => {
+    setBotEditorDraft((prev) => {
+      if (!prev) return prev;
+      const current = new Set(prev.allowed_skills ?? []);
+      if (enabled) {
+        current.add(skill);
+      } else {
+        current.delete(skill);
+      }
+      return {
+        ...prev,
+        allowed_skills: managedSkills.filter((name) => current.has(name)),
+      };
+    });
+  };
+
+  const openEditTelegramBotEditor = (index: number) => {
+    setBotEditorIndex(index);
+    setBotEditorDraft({ ...telegramConfigDrafts[index] });
+    setBotEditorUsernameInput("");
+    setBotEditorOpen(true);
+    setTelegramConfigSaveMessage(null);
+  };
+
+  const closeBotEditor = () => {
+    setBotEditorOpen(false);
+    setBotEditorIndex(null);
+    setBotEditorDraft(null);
+    setBotEditorUsernameInput("");
+  };
+
+  const addBotEditorTelegramUsername = (raw: string) => {
+    const normalized = normalizeTelegramUsername(raw);
+    if (!normalized) return;
+    setBotEditorDraft((prev) => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        allowed_telegram_usernames: normalizeTelegramUsernameList([
+          ...(prev.allowed_telegram_usernames ?? []),
+          normalized,
+        ]),
+      };
+    });
+    setBotEditorUsernameInput("");
+  };
+
+  const removeBotEditorTelegramUsername = (username: string) => {
+    const normalized = normalizeTelegramUsername(username);
+    if (!normalized) return;
+    setBotEditorDraft((prev) => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        allowed_telegram_usernames: (prev.allowed_telegram_usernames ?? []).filter((item) => item !== normalized),
+      };
+    });
+  };
+
+  const saveBotEditorDraft = async () => {
+    if (!botEditorDraft) return;
+    if (!robotChannelSaveSupported(botEditorDraft.channel)) {
+      setTelegramConfigError(
+        t(
+          "飞书和企业微信机器人的后端配置接口还在接，这个版本先只能直接保存 Telegram 机器人。",
+          "Feishu and WeCom backend config APIs are still being wired in. This version can only save Telegram robots directly.",
+        ),
+      );
+      return;
+    }
+    const nextDrafts =
+      botEditorIndex == null
+        ? [...telegramConfigDrafts, botEditorDraft]
+        : telegramConfigDrafts.map((bot, index) => (index === botEditorIndex ? { ...botEditorDraft, is_primary: bot.is_primary } : bot));
+    setTelegramConfigDrafts(nextDrafts);
+    closeBotEditor();
+    await saveTelegramConfig(nextDrafts);
+  };
+
+  const removeTelegramBotDraft = async (index: number) => {
+    const nextDrafts = telegramConfigDrafts.filter((_, currentIndex) => currentIndex !== index);
+    setTelegramConfigDrafts(nextDrafts);
+    setTelegramConfigSaveMessage(null);
+    await saveTelegramConfig(nextDrafts);
   };
 
   const scrollToSkillRow = (skillName: string) => {
@@ -1176,6 +1690,50 @@ export default function App() {
     }
   };
 
+  const saveTelegramConfig = async (draftsOverride?: TelegramBotConfigEntry[]) => {
+    setTelegramConfigSaving(true);
+    setTelegramConfigSaveMessage(null);
+    setTelegramConfigError(null);
+    setSystemRestartMessage(null);
+    try {
+      const { bots, agents } = buildAgentPayloadFromBots(draftsOverride ?? telegramConfigDrafts);
+      const res = await apiFetch(`/v1/telegram/config`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ bots, agents }),
+      });
+      const body = (await res.json()) as ApiResponse<TelegramConfigResponse>;
+      if (!res.ok || !body.ok || !body.data) {
+        throw new Error(body.error || `Telegram 配置保存失败 (${res.status})`);
+      }
+      setTelegramConfigData(body.data);
+      setTelegramConfigDrafts(mergeTelegramBotsWithAgents(body.data.bots ?? [], body.data.agents ?? []));
+      const savedMessage = t(
+        "Telegram 机器人名册已保存到 configs/channels/telegram.toml。",
+        "The Telegram robot roster was saved to configs/channels/telegram.toml.",
+      );
+      if (body.data.restart_required) {
+        setTelegramRestartNoticeVisible(true);
+        setTelegramConfigSaveMessage(
+          t(
+            "机器人设置已保存。等你把其他机器人也调整完，再统一重启 RustClaw 生效。",
+            "Robot settings were saved. Finish the other robot changes first, then restart RustClaw once to apply them all.",
+          ),
+        );
+        await fetchHealth();
+        return;
+      }
+      setTelegramRestartNoticeVisible(false);
+      setTelegramConfigSaveMessage(savedMessage);
+      await fetchHealth();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "未知错误";
+      setTelegramConfigError(message);
+    } finally {
+      setTelegramConfigSaving(false);
+    }
+  };
+
   const restartSystem = async () => {
     setSystemRestarting(true);
     setSystemRestartMessage(null);
@@ -1216,7 +1774,7 @@ export default function App() {
       }
 
       if (recovered) {
-        await Promise.allSettled([fetchLlmConfig(), fetchSkillsConfig(), fetchSkills()]);
+        await Promise.allSettled([fetchLlmConfig(), fetchSkillsConfig(), fetchSkills(), fetchTelegramConfig()]);
         setSystemRestartMessage(
           t(
             "RustClaw 已重启完成，当前页面已经恢复。",
@@ -1276,34 +1834,84 @@ export default function App() {
     return body.data;
   };
 
-  const queryTaskById = async (id: string, resetBeforeLoad = true): Promise<TaskQueryResponse | null> => {
-    if (!id.trim()) return null;
-    if (resetBeforeLoad) {
-      setTaskLoading(true);
-      setTaskError(null);
-      setTaskResult(null);
-    }
+  const fetchTaskDebugById = async (id: string): Promise<TaskDebugResponse> => {
+    const normalizedId = id.trim();
     try {
-      const result = await fetchTaskById(id);
-      setTaskResult(result);
-      setTaskError(null);
-      return result;
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "未知错误";
-      setTaskError(message);
-      return null;
-    } finally {
-      if (resetBeforeLoad) {
-        setTaskLoading(false);
+      const res = await apiFetch(`/v1/debug/tasks/${normalizedId}`);
+      const body = (await res.json()) as ApiResponse<TaskDebugResponse>;
+      if (res.ok && body.ok && body.data) {
+        return body.data;
       }
+    } catch {
+      // Fallback to parsing model_io.log for older backend builds.
     }
+    const params = new URLSearchParams({
+      file: "model_io.log",
+      lines: "2000",
+    });
+    const res = await apiFetch(`/v1/logs/latest?${params.toString()}`);
+    const body = (await res.json()) as ApiResponse<LogLatestResponse>;
+    if (!res.ok || !body.ok || !body.data) {
+      throw new Error(body.error || `调试信息读取失败 (${res.status})`);
+    }
+    const entries = (body.data.text || "")
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .flatMap((line) => {
+        try {
+          return [JSON.parse(line) as TaskDebugEntry];
+        } catch {
+          return [];
+        }
+      })
+      .filter((entry) => (entry.task_id || "").trim() === normalizedId)
+      .sort((a, b) => (a.ts ?? 0) - (b.ts ?? 0));
+    return {
+      task_id: normalizedId,
+      entries,
+    };
   };
 
-  const queryTask = async () => {
-    if (!taskId.trim()) return;
-    setTaskLoading(true);
-    await queryTaskById(taskId, false);
-    setTaskLoading(false);
+  const fetchUsageRecords = async () => {
+    setUsageRecordsLoading(true);
+    setUsageRecordsError(null);
+    try {
+      const params = new URLSearchParams({
+        page: String(usagePage),
+        page_size: "20",
+      });
+      if (usageSearchQuery.trim()) {
+        params.set("search", usageSearchQuery.trim());
+      }
+      if (usageChannelFilter !== "all") {
+        params.set("channel", usageChannelFilter);
+      }
+      if (usageStatusFilter !== "all") {
+        params.set("status", usageStatusFilter);
+      }
+      const res = await apiFetch(`/v1/debug/usage-records?${params.toString()}`);
+      const raw = await res.text();
+      if (res.status === 404) {
+        throw new Error(
+          t(
+            "使用记录页需要升级后的后端版本。",
+            "The usage history page needs the newer backend build.",
+          ),
+        );
+      }
+      const body = raw ? (JSON.parse(raw) as ApiResponse<UsageHistoryResponse>) : null;
+      if (!res.ok || !body?.ok || !body.data) {
+        throw new Error(body?.error || `使用记录读取失败 (${res.status})`);
+      }
+      setUsageRecordsData(body.data);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "未知错误";
+      setUsageRecordsError(message);
+      setUsageRecordsData(null);
+    } finally {
+      setUsageRecordsLoading(false);
+    }
   };
 
   const submitInteractionTask = async () => {
@@ -1311,6 +1919,10 @@ export default function App() {
     setInteractionError(null);
     setInteractionSubmittedTaskId(null);
     try {
+      const telegramBotName = interactionTelegramBotName.trim();
+      if (interactionChannel === "telegram" && !telegramBotName) {
+        throw new Error(t("严格模式下必须先选择 Telegram 机器人。", "Strict mode requires selecting a Telegram robot first."));
+      }
       let payload: Record<string, unknown>;
       if (interactionKind === "ask") {
         payload = {
@@ -1332,6 +1944,9 @@ export default function App() {
       const adapterName = interactionAdapter.trim();
       if (adapterName) {
         payload.adapter = adapterName;
+      }
+      if (interactionChannel === "telegram" && telegramBotName) {
+        payload.telegram_bot_name = telegramBotName;
       }
 
       const body: Record<string, unknown> = {
@@ -1360,10 +1975,7 @@ export default function App() {
       }
 
       setInteractionSubmittedTaskId(resp.data.task_id);
-      setTaskId(resp.data.task_id);
       setTrackingTaskId(resp.data.task_id);
-      setTaskResult(null);
-      setTaskError(null);
     } catch (err) {
       const message = err instanceof Error ? err.message : "未知错误";
       setInteractionError(message);
@@ -1391,9 +2003,16 @@ export default function App() {
         text,
         agent_mode: chatAgentMode,
       };
+      const telegramBotName = interactionTelegramBotName.trim();
+      if (interactionChannel === "telegram" && !telegramBotName) {
+        throw new Error(t("严格模式下必须先选择 Telegram 机器人。", "Strict mode requires selecting a Telegram robot first."));
+      }
       const adapterName = interactionAdapter.trim();
       if (adapterName) {
         chatPayload.adapter = adapterName;
+      }
+      if (interactionChannel === "telegram" && telegramBotName) {
+        chatPayload.telegram_bot_name = telegramBotName;
       }
       const submitBody = {
         user_key: uiKey,
@@ -1414,7 +2033,6 @@ export default function App() {
       }
 
       const submittedTaskId = submitData.data.task_id;
-      setTaskId(submittedTaskId);
       setTrackingTaskId(submittedTaskId);
 
       let finalResult: TaskQueryResponse | null = null;
@@ -1466,7 +2084,6 @@ export default function App() {
   useEffect(() => {
     if (!uiKey) {
       setUiAuthReady(false);
-      setAuthIdentity(null);
       setInteractionUserId(null);
       setInteractionChatId(null);
       setInteractionRole("-");
@@ -1477,12 +2094,130 @@ export default function App() {
   }, [apiBase]);
 
   useEffect(() => {
+    if (!debugModeEnabled) {
+      setTaskDebugLoading(false);
+      setTaskDebugError(null);
+      setTaskDebugData(null);
+      return;
+    }
+    const currentTaskId = taskResult?.task_id?.trim();
+    if (!uiAuthReady || !currentTaskId) {
+      setTaskDebugLoading(false);
+      setTaskDebugError(null);
+      setTaskDebugData(null);
+      return;
+    }
+    let cancelled = false;
+    setTaskDebugLoading(true);
+    setTaskDebugError(null);
+    void fetchTaskDebugById(currentTaskId)
+      .then((data) => {
+        if (cancelled) return;
+        setTaskDebugData(data);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        const message = err instanceof Error ? err.message : "未知错误";
+        setTaskDebugError(message);
+        setTaskDebugData(null);
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setTaskDebugLoading(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [apiBase, debugModeEnabled, taskResult?.task_id, uiAuthReady]);
+
+  useEffect(() => {
+    if (!uiAuthReady || currentPage !== "usage") return;
+    void fetchUsageRecords();
+  }, [apiBase, currentPage, uiAuthReady, usagePage, usageSearchQuery, usageChannelFilter, usageStatusFilter]);
+
+  useEffect(() => {
+    const safePage = usageRecordsData?.pagination?.page;
+    if (!safePage || safePage === usagePage) return;
+    setUsagePage(safePage);
+  }, [usagePage, usageRecordsData?.pagination?.page]);
+
+  useEffect(() => {
+    if (!selectedUsageRecordId) return;
+    const allUsageRecords = usageRecordsData?.records ?? [];
+    if (allUsageRecords.some((record) => record.record_id === selectedUsageRecordId)) return;
+    setSelectedUsageRecordDetail(null);
+    setSelectedUsageRecordError(null);
+    setSelectedUsageRecordLoading(false);
+    setSelectedUsageRecordId(null);
+  }, [selectedUsageRecordId, usageRecordsData]);
+
+  useEffect(() => {
+    if (!selectedUsageRecordId) {
+      setSelectedUsageRecordDetail(null);
+      setSelectedUsageRecordError(null);
+      setSelectedUsageRecordLoading(false);
+      return;
+    }
+    let cancelled = false;
+    const loadDetail = async () => {
+      setSelectedUsageRecordLoading(true);
+      setSelectedUsageRecordError(null);
+      try {
+        const res = await apiFetch(`/v1/debug/usage-records/${encodeURIComponent(selectedUsageRecordId)}`);
+        const raw = await res.text();
+        const body = raw ? (JSON.parse(raw) as ApiResponse<UsageHistoryRecordDetail>) : null;
+        if (!res.ok || !body?.ok || !body.data) {
+          throw new Error(body?.error || `使用记录详情读取失败 (${res.status})`);
+        }
+        if (!cancelled) {
+          setSelectedUsageRecordDetail(body.data);
+        }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "未知错误";
+        if (!cancelled) {
+          setSelectedUsageRecordDetail(null);
+          setSelectedUsageRecordError(message);
+        }
+      } finally {
+        if (!cancelled) {
+          setSelectedUsageRecordLoading(false);
+        }
+      }
+    };
+    void loadDetail();
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedUsageRecordId]);
+
+  useEffect(() => {
+    if (!selectedUsageRecordId) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setSelectedUsageRecordId(null);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [selectedUsageRecordId]);
+
+  useEffect(() => {
+    if (!selectedUsageRecordId) return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [selectedUsageRecordId]);
+
+  useEffect(() => {
     if (!uiAuthReady || pollingSeconds <= 0) return;
     void fetchHealth();
-    void fetchAuthMe();
     void fetchSkills();
     void fetchSkillsConfig();
     void fetchLlmConfig();
+    void fetchTelegramConfig();
     void fetchLocalInteractionContext();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [uiAuthReady]);
@@ -1536,10 +2271,10 @@ export default function App() {
 
   useEffect(() => {
     if (!uiAuthReady) return;
-    void fetchAuthMe(true);
     void fetchSkills();
     void fetchSkillsConfig();
     void fetchLlmConfig();
+    void fetchTelegramConfig();
     void fetchLocalInteractionContext();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [apiBase, uiAuthReady]);
@@ -1548,10 +2283,13 @@ export default function App() {
     if (!uiAuthReady) return;
     if (!trackingTaskId) return;
     const interval = window.setInterval(async () => {
-      const result = await queryTaskById(trackingTaskId, false);
-      if (!result) return;
-      if (["succeeded", "failed", "canceled", "timeout"].includes(result.status)) {
-        setTrackingTaskId(null);
+      try {
+        const result = await fetchTaskById(trackingTaskId);
+        if (["succeeded", "failed", "canceled", "timeout"].includes(result.status)) {
+          setTrackingTaskId(null);
+        }
+      } catch {
+        // Keep polling quietly; transient failures are expected during restarts.
       }
     }, 2000);
     return () => window.clearInterval(interval);
@@ -1605,9 +2343,11 @@ export default function App() {
         key: "telegram_bot",
         label: serviceDisplayName("telegram_bot"),
         serviceName: "telegramd",
-        healthy: health?.telegram_bot_healthy ?? health?.telegramd_healthy,
-        processCount: health?.telegram_bot_process_count ?? health?.telegramd_process_count,
-        memoryRssBytes: health?.telegram_bot_memory_rss_bytes ?? health?.telegramd_memory_rss_bytes,
+        healthy: health?.telegram_bot_healthy ?? health?.telegramd_healthy ?? health?.channel_gateway_healthy,
+        processCount:
+          health?.telegram_bot_process_count ?? health?.telegramd_process_count ?? health?.channel_gateway_process_count,
+        memoryRssBytes:
+          health?.telegram_bot_memory_rss_bytes ?? health?.telegramd_memory_rss_bytes ?? health?.channel_gateway_memory_rss_bytes,
       },
       {
         key: "whatsapp_web",
@@ -1693,7 +2433,13 @@ export default function App() {
           ...row,
           category: "ready",
           statusLabel: t("进程已起", "Daemon running"),
-          detail: t("至少从健康探针看，进程已经起来了。", "The health probe indicates the daemon process is up."),
+          detail:
+            row.key === "telegram_bot" && (health?.telegram_configured_bot_count ?? 0) > 1
+              ? t(
+                  `Telegram 接入进程正在承载 ${health?.telegram_configured_bot_count ?? 0} 个机器人。`,
+                  `The Telegram service is currently carrying ${health?.telegram_configured_bot_count ?? 0} robots.`,
+                )
+              : t("至少从健康探针看，进程已经起来了。", "The health probe indicates the daemon process is up."),
         };
       }
       if (row.healthy === false) {
@@ -1701,7 +2447,13 @@ export default function App() {
           ...row,
           category: "stopped",
           statusLabel: t("进程未运行", "Daemon stopped"),
-          detail: t("当前没有检测到对应进程。", "The corresponding daemon process was not detected."),
+          detail:
+            row.key === "telegram_bot" && (health?.telegram_configured_bot_count ?? 0) > 1
+              ? t(
+                  `已经配置 ${health?.telegram_configured_bot_count ?? 0} 个 Telegram 机器人，但 Telegram 接入进程还没运行。`,
+                  `${health?.telegram_configured_bot_count ?? 0} Telegram robots are configured, but the Telegram service is not running yet.`,
+                )
+              : t("当前没有检测到对应进程。", "The corresponding daemon process was not detected."),
         };
       }
       return {
@@ -1711,7 +2463,60 @@ export default function App() {
         detail: t("当前还拿不到足够的进程状态。", "There is not enough process state information yet."),
       };
     });
-  }, [adapterHealthRows, lang, waLoginStatus]);
+  }, [adapterHealthRows, health, lang, waLoginStatus]);
+  const telegramBotCards = useMemo(() => {
+    const statusMap = new Map((health?.telegram_bot_statuses ?? []).map((status) => [status.name, status]));
+    const names = telegramConfigDrafts.map((bot, index) => (index === 0 ? "primary" : bot.name.trim())).filter(Boolean);
+    const configMap = new Map(telegramConfigDrafts.map((bot, index) => [index === 0 ? "primary" : bot.name.trim(), bot]));
+    return names.map((name, index) => {
+      const isPrimary = index === 0 && name === "primary";
+      const runtimeStatus = statusMap.get(name);
+      const configBot = configMap.get(name);
+      const displayName = robotDisplayName(configBot) || (isPrimary ? localizedDefaultAgentName() : name);
+      const healthy = runtimeStatus?.healthy ?? false;
+      const statusLabel =
+        runtimeStatus?.status === "starting"
+          ? t("启动中", "Starting")
+          : runtimeStatus?.status === "stale"
+            ? t("心跳过期", "Heartbeat stale")
+            : runtimeStatus?.status === "stopped"
+              ? t("已停止", "Stopped")
+              : runtimeStatus?.status === "missing"
+                ? t("未报到", "No heartbeat yet")
+                : healthy === true
+          ? t("工作中", "On shift")
+          : t("待启动", "Waiting to start");
+      const statusTone =
+        healthy === true
+          ? "emerald"
+          : runtimeStatus?.status === "starting"
+            ? "white"
+            : runtimeStatus?.status === "stale"
+              ? "amber"
+              : "amber";
+      return {
+        name,
+        displayName,
+        monogram: telegramBotMonogram(displayName),
+        role: configBot?.role_name?.trim()
+          ? configBot.role_name
+          : isPrimary
+            ? localizedDefaultAgentName()
+            : t("未命名角色", "Unnamed role"),
+        description: configBot?.description?.trim() || "",
+        access_mode: configBot?.access_mode || "public",
+        allowed_telegram_usernames: configBot?.allowed_telegram_usernames ?? [],
+        statusLabel,
+        statusTone,
+        lastError: runtimeStatus?.last_error,
+        heartbeatTs: runtimeStatus?.last_heartbeat_ts ?? null,
+      };
+    });
+  }, [health, lang, telegramConfigDrafts]);
+  const telegramBotsOnShiftCount = useMemo(
+    () => telegramBotCards.filter((bot) => bot.statusTone === "emerald").length,
+    [telegramBotCards],
+  );
   const healthyServiceCount = useMemo(
     () => adapterHealthRows.filter((row) => row.healthy === true).length,
     [adapterHealthRows],
@@ -1729,7 +2534,59 @@ export default function App() {
       { ready: 0, attention: 0, stopped: 0, unknown: 0 },
     );
   }, [serviceStatusRows]);
-  const selectedChannelPreset = useMemo(() => channelPresets[channelBindingChannel], [channelBindingChannel, channelPresets]);
+  const channelGatewayRow = useMemo(
+    () => serviceStatusRows.find((row) => row.key === "telegram_bot"),
+    [serviceStatusRows],
+  );
+  const telegramRobotControl = useCallback(
+    (bot: { statusTone: string }) => {
+      if (!channelGatewayRow) return null;
+      const serviceName = channelGatewayRow.serviceName || "telegramd";
+      const affectsAllTelegramBots = telegramBotCards.length > 1;
+      const botOnline = bot.statusTone === "emerald";
+      if (botOnline) {
+        return {
+          action: "stop" as const,
+          className: "theme-service-action theme-service-action-stop",
+          label: t("暂停机器人", "Pause robot"),
+          title: affectsAllTelegramBots
+            ? t(
+                "现在暂停的是 Telegram 接入进程，这个渠道下的其他机器人也会一起暂停。",
+                "This pauses the Telegram service, so the other robots on this channel will pause too.",
+              )
+            : t("暂停后，这个机器人会先停止接收新消息。", "Pausing stops this robot from receiving new messages."),
+          serviceName,
+        };
+      }
+      if (channelGatewayRow.healthy === true) {
+        return {
+          action: "restart" as const,
+          className: "theme-service-action theme-service-action-restart",
+          label: t("重启机器人", "Restart robot"),
+          title: affectsAllTelegramBots
+            ? t(
+                "现在重启的是 Telegram 接入进程，这个渠道下的其他机器人也会一起重启。",
+                "This restarts the Telegram service, so the other robots on this channel will restart too.",
+              )
+            : t("重启后，这个机器人会重新接入。", "Restarting reconnects this robot."),
+          serviceName,
+        };
+      }
+      return {
+        action: "start" as const,
+        className: "theme-service-action theme-service-action-start",
+        label: t("启动机器人", "Start robot"),
+        title: affectsAllTelegramBots
+          ? t(
+              "现在启动的是 Telegram 接入进程，这个渠道下的其他机器人也会一起接入。",
+              "This starts the Telegram service, so the other robots on this channel will come online too.",
+            )
+          : t("启动后，这个机器人就能开始接收消息。", "Starting brings this robot online to receive messages."),
+        serviceName,
+      };
+    },
+    [channelGatewayRow, telegramBotCards.length, t],
+  );
   const managedSkills = useMemo(() => {
     const set = new Set<string>(skillsConfigData?.managed_skills ?? []);
     Object.keys(skillSwitchDraft).forEach((k) => set.add(k));
@@ -1808,6 +2665,88 @@ export default function App() {
     const savedModel = llmConfigData.selected_model?.trim() || "";
     return llmConfigData.restart_required || runtimeVendor !== savedVendor || runtimeModel !== savedModel;
   }, [llmConfigData]);
+  const agentLlmOptions = useMemo<AgentLlmOption[]>(
+    () =>
+      (llmConfigData?.vendors ?? []).map((vendor) => ({
+        vendor: vendor.name,
+        label: vendor.name,
+        models: vendor.models ?? [],
+        defaultModel: vendor.default_model || vendor.models?.[0] || "",
+      })),
+    [llmConfigData],
+  );
+  const robotPersonaPresets = useMemo(
+    () => [
+      {
+        id: "assistant",
+        label: t("私人秘书", "Personal assistant"),
+        description: t("帮我安排日程、提醒事项和日常沟通。", "Handles planning, reminders, and daily coordination."),
+        personaPrompt: t(
+          "你是一位贴心、可靠的私人秘书。优先帮用户安排日程、整理待办、提醒重要事项，并用温和、清晰、安心的语气回复。回答尽量简洁，先给结论，再补充必要细节。",
+          "You are a thoughtful and reliable personal assistant. Help with plans, to-dos, reminders, and daily coordination. Respond in a calm, clear, reassuring tone. Keep answers concise: lead with the answer, then add only the needed detail.",
+        ),
+      },
+      {
+        id: "support",
+        label: t("客服接待", "Customer support"),
+        description: t("负责答疑、接待和常见问题处理。", "Handles support questions, onboarding, and routine help."),
+        personaPrompt: t(
+          "你是一位耐心、专业的客服助手。优先准确理解问题，先直接回答，再给下一步建议。语气友好、不推诿、不使用太多技术词。如果信息不足，先问 1 个最关键的问题。",
+          "You are a patient and professional support assistant. Understand the issue first, answer directly, then suggest the next step. Be friendly and avoid technical jargon. If information is missing, ask for the single most important detail first.",
+        ),
+      },
+      {
+        id: "sales",
+        label: t("销售助手", "Sales assistant"),
+        description: t("负责咨询转化、报价说明和下一步推进。", "Handles discovery, pricing explanations, and next-step conversion."),
+        personaPrompt: t(
+          "你是一位清晰、主动的销售助手。回答时先抓住用户需求，再用简明语言介绍方案价值、适用场景和下一步行动。不要夸张承诺，语气自然、有推进感。",
+          "You are a clear and proactive sales assistant. Start from the user's need, explain the value and fit in simple language, and guide toward the next step. Avoid exaggerated promises; keep the tone natural and forward-moving.",
+        ),
+      },
+      {
+        id: "content",
+        label: t("内容助手", "Content assistant"),
+        description: t("负责写文案、整理信息和润色表达。", "Helps write copy, organize information, and polish wording."),
+        personaPrompt: t(
+          "你是一位擅长整理和表达的内容助手。优先把信息讲清楚、讲顺，输出结构化、好读、可直接使用的内容。默认避免长篇空话，尽量让结果拿来就能发。",
+          "You are a content assistant who excels at organizing and expressing information. Make outputs clear, structured, and ready to use. Avoid fluffy long-form wording; the result should be practical and publishable as-is.",
+        ),
+      },
+    ],
+    [t],
+  );
+  const beginnerRobotSkillPreset = useMemo(() => {
+    const preferred = ["health_check", "http_basic", "rss_fetch", "image_vision", "audio_transcribe", "audio_synthesize"];
+    return preferred.filter((name) => configuredEnabledSkills.has(name) || managedSkills.includes(name));
+  }, [configuredEnabledSkills, managedSkills]);
+  const botEditorSkillMode = useMemo(() => {
+    if (!botEditorDraft) return "inherit";
+    const current = [...new Set(botEditorDraft.allowed_skills ?? [])].sort();
+    const beginner = [...new Set(beginnerRobotSkillPreset)].sort();
+    if (current.length === 0) return "inherit";
+    if (current.length === beginner.length && current.every((value, index) => value === beginner[index])) {
+      return "common";
+    }
+    return "custom";
+  }, [beginnerRobotSkillPreset, botEditorDraft]);
+  const serializeTelegramConfigDrafts = (bots: TelegramBotConfigEntry[]) =>
+    JSON.stringify(
+      bots.map((bot, index) => ({
+        name: index === 0 ? "primary" : bot.name.trim(),
+        bot_token: bot.bot_token.trim(),
+        agent_id: (bot.agent_id || "main").trim() || "main",
+        admins: bot.admins ?? [],
+        allowlist: bot.allowlist ?? [],
+        is_primary: index === 0,
+        role_name: bot.role_name?.trim() || "",
+        description: bot.description?.trim() || "",
+        persona_prompt: bot.persona_prompt?.trim() || "",
+        preferred_vendor: bot.preferred_vendor?.trim() || "",
+        preferred_model: bot.preferred_model?.trim() || "",
+        allowed_skills: bot.allowed_skills ?? [],
+      })),
+    );
   const normalizedSkillsSearchQuery = useMemo(() => skillsSearchQuery.trim().toLowerCase(), [skillsSearchQuery]);
   const filteredManagedSkills = useMemo(
     () => managedSkills.filter((name) => !normalizedSkillsSearchQuery || name.toLowerCase().includes(normalizedSkillsSearchQuery)),
@@ -1866,13 +2805,9 @@ export default function App() {
         title: t("首页", "Home"),
         desc: t("先看现在能不能用、下一步该点哪里，再决定要不要进更高级的页面。", "See whether things are working, what to do next, and only then move into advanced pages."),
       },
-      services: {
-        title: t("连接状态", "Connections"),
-        desc: t("这里看 Telegram、WhatsApp、飞书这些连接服务有没有正常工作。", "Check whether Telegram, WhatsApp, Feishu, and similar connection services are working properly."),
-      },
       channels: {
-        title: t("绑定账号", "Bind Accounts"),
-        desc: t("把你的 Telegram、WhatsApp、飞书这些外部账号绑定到当前登录身份。", "Bind Telegram, WhatsApp, Feishu, and other external accounts to the current signed-in identity."),
+        title: t("机器人设置", "Robot Settings"),
+        desc: t("这里管理机器人。", "Manage robots here."),
       },
       models: {
         title: t("模型设置", "Model Settings"),
@@ -1885,6 +2820,10 @@ export default function App() {
       chat: {
         title: t("对话测试", "Chat Test"),
         desc: t("用最简单的方式给 RustClaw 发一条消息，确认它能正常回应。", "Send a simple message to RustClaw and confirm it can respond."),
+      },
+      usage: {
+        title: t("使用记录", "Usage History"),
+        desc: t("这里能看到每一次真实请求。点开一条，就能看当时发了什么、模型回了什么。", "See each real request here. Open any record to inspect the input and the model response."),
       },
       logs: {
         title: t("故障日志", "Logs"),
@@ -1906,15 +2845,9 @@ export default function App() {
         icon: <LayoutDashboard className="h-4 w-4" />,
       },
       {
-        id: "services" as const,
-        label: t("连接状态", "Connections"),
-        hint: t("查连接", "service health"),
-        icon: <Server className="h-4 w-4" />,
-      },
-      {
         id: "channels" as const,
-        label: t("绑定账号", "Bind Accounts"),
-        hint: t("连账号", "connect accounts"),
+        label: t("机器人设置", "Robot Settings"),
+        hint: t("机器人", "robots"),
         icon: <Database className="h-4 w-4" />,
       },
       {
@@ -1936,6 +2869,12 @@ export default function App() {
         icon: <MessageCircle className="h-4 w-4" />,
       },
       {
+        id: "usage" as const,
+        label: t("使用记录", "Usage History"),
+        hint: t("看发了什么", "request history"),
+        icon: <Timer className="h-4 w-4" />,
+      },
+      {
         id: "logs" as const,
         label: t("故障日志", "Logs"),
         hint: t("出问题再看", "when broken"),
@@ -1951,6 +2890,48 @@ export default function App() {
     [lang],
   );
   const currentPageMeta = pageMeta[currentPage];
+  const usageChannelLabel = useCallback(
+    (channel?: string | null) => {
+      if (channel === "telegram") return "Telegram";
+      if (channel === "whatsapp") return "WhatsApp";
+      if (channel === "feishu") return "Feishu";
+      if (channel === "lark") return "Lark";
+      if (channel === "ui") return t("控制台", "Console");
+      return channel || "--";
+    },
+    [t],
+  );
+  const usageStatusLabel = useCallback(
+    (status?: string | null) => {
+      if (status === "ok") return t("成功", "Success");
+      if (!status || status === "error") return t("失败", "Failed");
+      return status;
+    },
+    [t],
+  );
+  const usageRecords = usageRecordsData?.records ?? [];
+  const usagePagination = usageRecordsData?.pagination ?? null;
+  const usageChannelOptions = useMemo(() => {
+    const defaults = ["all", "telegram", "whatsapp", "feishu", "lark", "ui"];
+    const discovered = usageRecords
+      .map((record) => (record.channel || "").trim())
+      .filter(Boolean)
+      .filter((value, index, arr) => arr.indexOf(value) === index);
+    return defaults.filter((value, index, arr) => arr.indexOf(value) === index).concat(discovered.filter((value) => !defaults.includes(value)));
+  }, [usageRecords]);
+  const usageStats = usageRecordsData?.stats ?? {
+    total_requests: 0,
+    success_requests: 0,
+    failed_requests: 0,
+    prompt_tokens: 0,
+    completion_tokens: 0,
+    total_tokens: 0,
+  };
+  const selectedUsageRecordSummary = useMemo(
+    () => usageRecords.find((record) => record.record_id === selectedUsageRecordId) ?? null,
+    [selectedUsageRecordId, usageRecords],
+  );
+  const selectedUsageRecord = selectedUsageRecordDetail ?? selectedUsageRecordSummary;
   const suggestedNextStep = useMemo(() => {
     if (!isOnline) {
       return {
@@ -1960,20 +2941,20 @@ export default function App() {
         cta: t("查看首页提示", "Open Home"),
       };
     }
-    if ((health?.bound_channel_count ?? 0) === 0) {
+    if ((health?.telegram_configured_bot_count ?? 0) === 0) {
       return {
-        title: t("绑定你的账号", "Bind your account"),
-        desc: t("第一次使用时，先把 Telegram / WhatsApp / 飞书 这些外部账号绑定到当前登录 key。", "For first-time setup, bind Telegram / WhatsApp / Feishu identities to the current login key."),
+        title: t("去机器人设置完成配置", "Open Robot Settings to finish setup"),
+        desc: t("第一次使用时，先新增一个机器人并保存。", "For first-time setup, create and save your first robot."),
         page: "channels" as const,
-        cta: t("去绑定账号", "Bind account"),
+        cta: t("打开机器人设置", "Open Robot Settings"),
       };
     }
     if (healthyServiceCount === 0) {
       return {
-        title: t("启动连接服务", "Start connection services"),
-        desc: t("如果一个服务都没运行，就先启动你需要用到的那几个渠道。", "If no connection service is running yet, start the channels you plan to use."),
-        page: "services" as const,
-        cta: t("去看连接状态", "Check services"),
+        title: t("去机器人设置启动连接服务", "Open Robot Settings to start services"),
+        desc: t("如果一个服务都没运行，就先到机器人设置里把你需要用到的连接服务启动起来。", "If no connection service is running yet, start the services you need from Robot Settings."),
+        page: "channels" as const,
+        cta: t("打开机器人设置", "Open Robot Settings"),
       };
     }
     return {
@@ -1982,7 +2963,7 @@ export default function App() {
       page: "chat" as const,
       cta: t("去试一条消息", "Try a message"),
     };
-  }, [healthyServiceCount, health?.bound_channel_count, isOnline, lang]);
+  }, [healthyServiceCount, health?.telegram_configured_bot_count, isOnline, lang]);
   const toggleThemeMode = () => {
     setThemeMode((current) => (current === "dark" ? "light" : "dark"));
   };
@@ -2113,6 +3094,280 @@ export default function App() {
     );
   }
 
+  const debugUsageRows = (usage?: DebugUsageSnapshot | null) => {
+    if (!usage) return [];
+    return [
+      { key: "prompt_tokens", label: t("输入 tokens", "Prompt tokens"), value: usage.prompt_tokens ?? usage.input_tokens ?? null },
+      { key: "completion_tokens", label: t("输出 tokens", "Completion tokens"), value: usage.completion_tokens ?? usage.output_tokens ?? null },
+      { key: "total_tokens", label: t("总计", "Total"), value: usage.total_tokens ?? null },
+      { key: "reasoning_tokens", label: t("推理 tokens", "Reasoning"), value: usage.reasoning_tokens ?? null },
+      { key: "cached_tokens", label: t("缓存命中", "Cached"), value: usage.cached_tokens ?? usage.cache_read_input_tokens ?? null },
+    ].filter((row) => row.value != null);
+  };
+
+  const renderTaskDebugPanel = () => {
+    if (!debugModeEnabled) return null;
+    const activeTaskId = taskResult?.task_id?.trim();
+    return (
+      <section className="mt-4 rounded-2xl border border-sky-400/15 bg-sky-500/5 p-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <p className="text-[11px] uppercase tracking-[0.24em] text-sky-200/70">{t("调试模式", "Debug mode")}</p>
+            <h4 className="mt-2 text-base font-semibold text-white">{t("模型请求与返回", "Model requests and responses")}</h4>
+            <p className="mt-1 text-sm text-white/55">
+              {t("这里展示最终 prompt、发给模型的 request JSON、原始返回和 token 使用情况。", "This shows the final prompt, request JSON, raw model output, and token usage.")}
+            </p>
+          </div>
+          {activeTaskId ? <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-xs text-white/60">{activeTaskId}</span> : null}
+        </div>
+
+        {!activeTaskId ? (
+          <p className="mt-4 rounded-xl border border-white/10 bg-black/20 px-4 py-3 text-sm text-white/65">
+            {t("先跑一条任务，完成后这里就会自动显示调试数据。", "Run a task first. The debug data will appear here automatically once it finishes.")}
+          </p>
+        ) : null}
+
+        {taskDebugError ? (
+          <p className="mt-4 rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-200">
+            {t("调试信息读取失败", "Debug data failed to load")}: {taskDebugError}
+          </p>
+        ) : null}
+
+        {taskDebugLoading ? (
+          <div className="mt-4 flex items-center gap-2 text-sm text-white/65">
+            <Loader2 className="h-4 w-4 animate-spin" />
+            {t("正在加载调试数据…", "Loading debug data...")}
+          </div>
+        ) : null}
+
+        {!taskDebugLoading && activeTaskId && !taskDebugError && (taskDebugData?.entries.length ?? 0) === 0 ? (
+          <p className="mt-4 rounded-xl border border-white/10 bg-black/20 px-4 py-3 text-sm text-white/65">
+            {t("这条任务暂时没有模型调用记录。可能它还没走到 LLM，或者这是纯技能/纯系统动作。", "This task has no model call records yet. It may not have reached the LLM, or it may be a pure skill/system action.")}
+          </p>
+        ) : null}
+
+        {(taskDebugData?.entries.length ?? 0) > 0 ? (
+          <div className="mt-4 space-y-4">
+            {taskDebugData!.entries.map((entry, index) => {
+              const usageRows = debugUsageRows(entry.usage);
+              return (
+                <article key={`${entry.ts ?? "debug"}-${index}`} className="rounded-2xl border border-white/10 bg-black/20 p-4">
+                  <div className="flex flex-wrap items-center gap-2 text-xs text-white/60">
+                    <span className="rounded-full border border-white/10 bg-white/5 px-2.5 py-1">{entry.vendor || "--"}</span>
+                    <span className="rounded-full border border-white/10 bg-white/5 px-2.5 py-1">{entry.model || "--"}</span>
+                    <span className={entry.status === "ok" ? "rounded-full border border-emerald-400/20 bg-emerald-400/10 px-2.5 py-1 text-emerald-200" : "rounded-full border border-amber-400/20 bg-amber-400/10 px-2.5 py-1 text-amber-200"}>
+                      {entry.status || "--"}
+                    </span>
+                    {entry.prompt_file ? <span>{entry.prompt_file}</span> : null}
+                    {entry.ts ? <span>{toLocalTime(entry.ts * 1000)}</span> : null}
+                  </div>
+
+                  {usageRows.length > 0 ? (
+                    <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-5">
+                      {usageRows.map((row) => (
+                        <div key={row.key} className="rounded-xl border border-white/10 bg-white/5 px-3 py-2">
+                          <p className="text-[11px] uppercase tracking-widest text-white/45">{row.label}</p>
+                          <p className="mt-1 text-sm font-medium text-white">{row.value}</p>
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
+
+                  {entry.error ? (
+                    <p className="mt-3 rounded-xl border border-red-500/25 bg-red-500/10 px-3 py-2 text-sm text-red-200">{entry.error}</p>
+                  ) : null}
+
+                  <div className="mt-4 space-y-3">
+                    <details className="rounded-xl border border-white/10 bg-[#12151f] p-3" open={index === taskDebugData!.entries.length - 1}>
+                      <summary className="cursor-pointer text-sm font-medium text-white/85">{t("最终 Prompt", "Final prompt")}</summary>
+                      <pre className="theme-scrollbar mt-3 max-h-80 overflow-auto whitespace-pre-wrap break-words text-xs text-white/75">{entry.prompt || "--"}</pre>
+                    </details>
+
+                    <DebugPayloadPanel
+                      title={t("Request JSON", "Request JSON")}
+                      value={entry.request_payload}
+                      formatLabel={t("格式化查看", "Formatted view")}
+                      rawLabel={t("查看原始 JSON", "View raw JSON")}
+                    />
+
+                    <details className="rounded-xl border border-white/10 bg-[#12151f] p-3">
+                      <summary className="cursor-pointer text-sm font-medium text-white/85">{t("原始返回", "Raw response")}</summary>
+                      <pre className="theme-scrollbar mt-3 max-h-80 overflow-auto whitespace-pre-wrap break-words text-xs text-white/75">{entry.raw_response || "--"}</pre>
+                    </details>
+
+                    <details className="rounded-xl border border-white/10 bg-[#12151f] p-3">
+                      <summary className="cursor-pointer text-sm font-medium text-white/85">{t("清洗后的返回", "Clean response")}</summary>
+                      <pre className="theme-scrollbar mt-3 max-h-80 overflow-auto whitespace-pre-wrap break-words text-xs text-white/75">{entry.clean_response || entry.response || "--"}</pre>
+                    </details>
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+        ) : null}
+      </section>
+    );
+  };
+
+  const renderUsageRecordModal = () => {
+    if (!selectedUsageRecord) return null;
+
+    const detailMeta = [
+      { label: t("渠道", "Channel"), value: usageChannelLabel(selectedUsageRecord.channel) },
+      { label: t("模型", "Model"), value: selectedUsageRecord.model || "--" },
+      { label: t("提供方", "Provider"), value: selectedUsageRecord.provider || selectedUsageRecord.vendor || "--" },
+      { label: t("状态", "Status"), value: usageStatusLabel(selectedUsageRecord.status) },
+      { label: "task_id", value: selectedUsageRecord.task_id },
+      { label: t("时间", "Time"), value: selectedUsageRecord.ts ? toLocalDateTime(selectedUsageRecord.ts * 1000) : "--" },
+    ];
+    const locale = lang === "zh" ? "zh-CN" : "en-US";
+    const detailReady = Boolean(selectedUsageRecordDetail);
+    const chainEntries = selectedUsageRecordDetail?.entries ?? [];
+
+    return (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-[rgba(8,10,16,0.72)] px-4 py-6 backdrop-blur-sm" onClick={() => setSelectedUsageRecordId(null)}>
+        <div
+          className="theme-panel theme-scrollbar flex max-h-[92vh] w-full max-w-5xl flex-col overflow-auto border-white/12 bg-[linear-gradient(180deg,rgba(38,41,51,0.98),rgba(23,26,35,0.98))] p-5 shadow-[0_32px_90px_rgba(0,0,0,0.42)] sm:p-6"
+          onClick={(event) => event.stopPropagation()}
+        >
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div className="max-w-3xl">
+              <p className="text-[11px] uppercase tracking-[0.24em] text-[#ffcfb5]/75">{t("记录详情", "Record detail")}</p>
+              <h3 className="mt-2 text-xl font-semibold text-white sm:text-2xl">{selectedUsageRecord.request_text || t("这次请求没有记录到用户原文。", "This request has no captured user text.")}</h3>
+              <p className="mt-2 text-sm leading-7 text-white/60">
+                {t(
+                  "这里按时间顺序展开这次请求的完整链路，方便你确认路由判断、最终提示词和每一步返回了什么。",
+                  "This expands the full chain for this request in time order, so you can inspect the routing step, final prompts, and each response.",
+                )}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setSelectedUsageRecordId(null)}
+              className="inline-flex h-12 w-12 items-center justify-center rounded-2xl border border-white/12 bg-white/6 text-white/72 transition hover:bg-white/12"
+              aria-label={t("关闭详情", "Close detail")}
+            >
+              <X className="h-5 w-5" />
+            </button>
+          </div>
+
+          <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+            {detailMeta.map((item) => (
+              <div key={item.label} className="rounded-2xl border border-white/10 bg-black/18 px-4 py-3">
+                <p className="text-[11px] uppercase tracking-widest text-white/40">{item.label}</p>
+                <p className="mt-1 break-all text-sm leading-6 text-white/82">{item.value}</p>
+              </div>
+            ))}
+          </div>
+
+          <div className="mt-4 grid gap-3 sm:grid-cols-3">
+            <div className="rounded-2xl border border-white/10 bg-black/18 px-4 py-3">
+              <p className="text-[11px] uppercase tracking-widest text-white/40">{t("输入 Tokens", "Prompt tokens")}</p>
+              <p className="mt-1 text-lg font-semibold text-white">{formatInteger(selectedUsageRecord.prompt_tokens, locale)}</p>
+            </div>
+            <div className="rounded-2xl border border-white/10 bg-black/18 px-4 py-3">
+              <p className="text-[11px] uppercase tracking-widest text-white/40">{t("输出 Tokens", "Completion tokens")}</p>
+              <p className="mt-1 text-lg font-semibold text-white">{formatInteger(selectedUsageRecord.completion_tokens, locale)}</p>
+            </div>
+            <div className="rounded-2xl border border-white/10 bg-black/18 px-4 py-3">
+              <p className="text-[11px] uppercase tracking-widest text-white/40">{t("总 Tokens", "Total tokens")}</p>
+              <p className="mt-1 text-lg font-semibold text-white">{formatInteger(selectedUsageRecord.total_tokens, locale)}</p>
+            </div>
+          </div>
+
+          <div className="mt-4 rounded-2xl border border-white/10 bg-black/18 px-4 py-3">
+            <p className="text-[11px] uppercase tracking-widest text-white/40">{t("链路节点数", "Chain steps")}</p>
+            <p className="mt-1 text-lg font-semibold text-white">{formatInteger(selectedUsageRecord.llm_call_count, locale)}</p>
+          </div>
+
+          {selectedUsageRecord.error ? (
+            <p className="mt-4 rounded-2xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-200">
+              {selectedUsageRecord.error}
+            </p>
+          ) : null}
+
+          {selectedUsageRecordLoading ? (
+            <div className="mt-4 flex items-center gap-2 rounded-2xl border border-white/10 bg-black/18 px-4 py-3 text-sm text-white/65">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              {t("正在加载完整参数和返回内容…", "Loading the full request and response...")}
+            </div>
+          ) : null}
+
+          {selectedUsageRecordError ? (
+            <p className="mt-4 rounded-2xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-200">
+              {t("详情读取失败", "Detail load failed")}: {selectedUsageRecordError}
+            </p>
+          ) : null}
+
+          {detailReady ? (
+            <div className="mt-4 space-y-4">
+              {chainEntries.map((entry, index) => (
+                <article key={`${entry.prompt_file || "step"}-${entry.ts || index}-${index}`} className="rounded-2xl border border-white/10 bg-[#12151f] p-4">
+                  <div className="flex flex-wrap items-center gap-2 text-xs text-white/60">
+                    <span className="rounded-full border border-white/10 bg-white/5 px-2.5 py-1">{t("第", "Step")} {index + 1}</span>
+                    <span className="rounded-full border border-white/10 bg-white/5 px-2.5 py-1">{entry.prompt_file || "--"}</span>
+                    <span className={entry.status === "ok" ? "rounded-full border border-emerald-400/20 bg-emerald-400/10 px-2.5 py-1 text-emerald-200" : "rounded-full border border-rose-400/20 bg-rose-400/10 px-2.5 py-1 text-rose-200"}>
+                      {usageStatusLabel(entry.status)}
+                    </span>
+                    <span>{entry.ts ? toLocalDateTime(entry.ts * 1000) : "--"}</span>
+                    <span>{entry.model || "--"}</span>
+                  </div>
+
+                  <div className="mt-3 grid gap-3 sm:grid-cols-3">
+                    <div className="rounded-xl border border-white/10 bg-white/5 px-3 py-2">
+                      <p className="text-[11px] uppercase tracking-widest text-white/40">{t("输入", "Prompt")}</p>
+                      <p className="mt-1 text-sm text-white">{formatInteger(entry.prompt_tokens, locale)}</p>
+                    </div>
+                    <div className="rounded-xl border border-white/10 bg-white/5 px-3 py-2">
+                      <p className="text-[11px] uppercase tracking-widest text-white/40">{t("输出", "Completion")}</p>
+                      <p className="mt-1 text-sm text-white">{formatInteger(entry.completion_tokens, locale)}</p>
+                    </div>
+                    <div className="rounded-xl border border-white/10 bg-white/5 px-3 py-2">
+                      <p className="text-[11px] uppercase tracking-widest text-white/40">{t("总计", "Total")}</p>
+                      <p className="mt-1 text-sm text-white">{formatInteger(entry.total_tokens, locale)}</p>
+                    </div>
+                  </div>
+
+                  {entry.error ? (
+                    <p className="mt-3 rounded-xl border border-red-500/25 bg-red-500/10 px-3 py-2 text-sm text-red-200">{entry.error}</p>
+                  ) : null}
+
+                  <div className="mt-4 space-y-3">
+                    <DebugPayloadPanel
+                      title={t("请求参数", "Request payload")}
+                      value={entry.request_payload}
+                      defaultOpen
+                      formatLabel={t("格式化查看", "Formatted view")}
+                      rawLabel={t("查看原始 JSON", "View raw JSON")}
+                    />
+                    <details className="rounded-xl border border-white/10 bg-black/20 p-3">
+                      <summary className="cursor-pointer text-sm font-medium text-white/85">{t("最终提示词", "Final prompt")}</summary>
+                      <pre className="theme-scrollbar mt-3 max-h-72 overflow-auto whitespace-pre-wrap break-words text-xs leading-6 text-white/75">{entry.prompt || "--"}</pre>
+                    </details>
+                    <details className="rounded-xl border border-white/10 bg-black/20 p-3" open>
+                      <summary className="cursor-pointer text-sm font-medium text-white/85">{t("返回内容", "Response")}</summary>
+                      <pre className="theme-scrollbar mt-3 max-h-72 overflow-auto whitespace-pre-wrap break-words text-xs leading-6 text-white/75">{entry.clean_response || "--"}</pre>
+                    </details>
+                    <details className="rounded-xl border border-white/10 bg-black/20 p-3">
+                      <summary className="cursor-pointer text-sm font-medium text-white/85">{t("原始返回", "Raw response")}</summary>
+                      <pre className="theme-scrollbar mt-3 max-h-72 overflow-auto whitespace-pre-wrap break-words text-xs leading-6 text-white/75">{entry.raw_response || "--"}</pre>
+                    </details>
+                  </div>
+                </article>
+              ))}
+            </div>
+          ) : (
+            <div className="mt-4 space-y-3">
+              <div className="rounded-2xl border border-white/10 bg-[#12151f] p-4 text-sm text-white/60">
+                {t("详情加载后会按时间顺序显示整条请求链路。", "The full request chain will appear in time order after the detail finishes loading.")}
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div className="theme-shell min-h-screen">
       <header className="theme-header sticky top-0 z-40 border-b border-white/10 px-3 py-3 sm:px-6 sm:py-4">
@@ -2226,43 +3481,69 @@ export default function App() {
                 </section>
               )}
 
-              <section className="grid gap-4 xl:grid-cols-[minmax(0,1.1fr)_320px]">
-                <div className="rounded-2xl border border-white/10 bg-white/5 p-5">
-                  <h3 className="text-lg font-semibold sm:text-xl">{t("常用操作", "Common actions")}</h3>
-                  <div className="mt-4 space-y-2.5">
-                    {[
-                      {
-                        title: t("先看首页状态", "Check Home first"),
-                      },
-                      {
-                        title: t("绑定你的外部账号", "Bind your external account"),
-                      },
-                      {
-                        title: t("试一条最简单的消息", "Send one simple test message"),
-                      },
-                    ].map((step, index) => (
-                      <div key={step.title} className="flex gap-3 rounded-2xl border border-white/10 bg-black/20 px-4 py-3">
-                        <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-white/10 bg-white/5 text-xs font-semibold text-white/85">
-                          {index + 1}
-                        </div>
-                        <div>
-                          <p className="text-sm font-semibold text-white">{step.title}</p>
-                        </div>
+              <section className="theme-panel p-4 sm:p-5">
+                <div className="grid gap-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(280px,0.8fr)]">
+                  <div className="rounded-[22px] border border-white/10 bg-black/20 p-4 sm:p-5">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div>
+                        <p className="theme-kicker text-[10px] uppercase tracking-[0.3em]">{t("Telegram 服务", "Telegram service")}</p>
+                        <h3 className="mt-2 text-xl font-semibold text-white">{channelGatewayRow?.statusLabel || t("状态未知", "Unknown state")}</h3>
                       </div>
-                    ))}
+                      <span
+                        className={
+                          channelGatewayRow?.category === "ready"
+                            ? "rounded-full border border-emerald-500/25 bg-emerald-500/10 px-3 py-1 text-xs text-emerald-200"
+                            : channelGatewayRow?.category === "attention"
+                              ? "rounded-full border border-amber-500/25 bg-amber-500/10 px-3 py-1 text-xs text-amber-200"
+                              : "rounded-full border border-red-500/25 bg-red-500/10 px-3 py-1 text-xs text-red-200"
+                        }
+                      >
+                        {channelGatewayRow?.healthy === true ? t("服务在线", "Service online") : t("未就绪", "Not ready")}
+                      </span>
+                    </div>
+                    <p className="mt-3 text-sm text-white/62">
+                      {channelGatewayRow?.detail || t("当前还没有拿到 Telegram 服务状态。", "The Telegram service state is not available yet.")}
+                    </p>
+                    <div className="mt-4 flex flex-wrap gap-2">
+                      <span className="theme-service-kpi">{t("已配置机器人", "Configured robots")} {health?.telegram_configured_bot_count ?? 0}</span>
+                      <span className="theme-service-kpi">{t("在线机器人", "Robots online")} {telegramBotsOnShiftCount}</span>
+                    </div>
+                    <div className="mt-4 flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={() => void controlService(channelGatewayRow?.serviceName || "telegramd", channelGatewayRow?.healthy === true ? "restart" : "start")}
+                        disabled={Boolean(serviceActionLoading[channelGatewayRow?.serviceName || "telegramd"])}
+                        className="theme-accent-btn"
+                      >
+                        {serviceActionLoading[channelGatewayRow?.serviceName || "telegramd"] ? <Loader2 className="h-4 w-4 animate-spin" /> : <Server className="h-4 w-4" />}
+                        {channelGatewayRow?.healthy === true ? t("重启", "Restart") : t("启动", "Start")}
+                      </button>
+                      <button type="button" onClick={() => setCurrentPage("channels")} className="theme-secondary-btn">
+                        <Database className="h-4 w-4" />
+                        {t("打开机器人设置", "Open Robot Settings")}
+                      </button>
+                    </div>
                   </div>
-                </div>
 
-                <div className="rounded-2xl border border-white/10 bg-black/20 p-5">
-                  <h3 className="text-xl font-semibold">{suggestedNextStep.title}</h3>
-                  <button
-                    type="button"
-                    onClick={() => setCurrentPage(suggestedNextStep.page)}
-                    className="mt-4 w-full theme-accent-btn"
-                  >
-                    <RefreshCw className="h-4 w-4" />
-                    {suggestedNextStep.cta}
-                  </button>
+                  <div className="rounded-[22px] border border-white/10 bg-white/5 p-4 sm:p-5">
+                    <p className="text-[10px] uppercase tracking-[0.28em] text-white/45">{t("下一步", "Next")}</p>
+                    <h3 className="mt-2 text-xl font-semibold text-white">{suggestedNextStep.title}</h3>
+                    <p className="mt-3 text-sm text-white/62">{suggestedNextStep.desc}</p>
+                    <div className="mt-4 flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setCurrentPage(suggestedNextStep.page)}
+                        className="theme-accent-btn"
+                      >
+                        <RefreshCw className="h-4 w-4" />
+                        {suggestedNextStep.cta}
+                      </button>
+                      <button type="button" onClick={() => setCurrentPage("chat")} className="theme-secondary-btn">
+                        <MessageCircle className="h-4 w-4" />
+                        {t("试消息", "Try Chat")}
+                      </button>
+                    </div>
+                  </div>
                 </div>
               </section>
 
@@ -2327,7 +3608,7 @@ export default function App() {
                 ) : null}
               </details>
 
-              <section className="grid gap-3 lg:grid-cols-2 xl:grid-cols-4">
+              <section className="grid gap-3 lg:grid-cols-2 xl:grid-cols-3">
                 <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
                   <p className="text-[10px] uppercase tracking-widest text-white/45">{t("整体状态", "Overall status")}</p>
                   <p className="mt-2 text-lg font-semibold text-white">
@@ -2358,14 +3639,6 @@ export default function App() {
                     <p>{t("刷新频率", "Refresh")}: {pollingSeconds > 0 ? t(`每 ${pollingSeconds} 秒`, `Every ${pollingSeconds}s`) : t("已关闭", "Off")}</p>
                   </div>
                 </div>
-                <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
-                  <p className="text-[10px] uppercase tracking-widest text-white/45">{t("建议处理顺序", "Suggested order")}</p>
-                  <ol className="mt-3 list-decimal space-y-2 pl-5 text-sm text-white/65">
-                    <li>{t("先看是否在线。", "Check whether the service is online.")}</li>
-                    <li>{t("再看有没有积压任务。", "Then check whether tasks are backing up.")}</li>
-                    <li>{t("最后再决定要不要进高级页。", "Only then decide whether you need advanced pages.")}</li>
-                  </ol>
-                </div>
               </section>
 
               <div className="space-y-4">
@@ -2374,14 +3647,14 @@ export default function App() {
                   <div className="mt-4 grid gap-3">
                     <QuickActionCard
                       title={t("绑定外部账号", "Bind an external account")}
-                      cta={t("打开绑定账号页", "Open Bind Accounts")}
+                      cta={t("打开机器人设置", "Open Robot Settings")}
                       onClick={() => setCurrentPage("channels")}
                       icon={<Database className="h-4 w-4" />}
                     />
                     <QuickActionCard
-                      title={t("看看连接是不是正常", "Check whether connections are healthy")}
-                      cta={t("打开连接状态页", "Open Connections")}
-                      onClick={() => setCurrentPage("services")}
+                      title={t("管理渠道和机器人", "Manage channels and robots")}
+                      cta={t("打开机器人设置", "Open Robot Settings")}
+                      onClick={() => setCurrentPage("channels")}
                       icon={<Server className="h-4 w-4" />}
                     />
                     <QuickActionCard
@@ -2665,7 +3938,7 @@ export default function App() {
                       className="theme-accent-soft-btn"
                     >
                       <Database className="h-4 w-4" />
-                      {tSlash("打开渠道 / 诊断 / Open Channels / Diagnostics")}
+                      {tSlash("打开机器人设置 / Open Robot Settings")}
                     </button>
                   </div>
                 </section>
@@ -2674,295 +3947,625 @@ export default function App() {
           ) : null}
 
           {currentPage === "channels" ? (
-            <div className="space-y-4">
-              <section className="rounded-2xl border border-white/10 bg-white/5 p-5">
-                <div className="flex flex-wrap gap-2 text-sm text-white/70">
-                  {[
-                    t("1. 选账号来源", "1. Choose source"),
-                    t("2. 填用户 ID", "2. Enter user ID"),
-                    t("3. 先查询", "3. Resolve first"),
-                    t("4. 再绑定", "4. Then bind"),
-                  ].map((step) => (
-                    <span key={step} className="rounded-full border border-white/10 bg-black/20 px-3 py-2">
-                      {step}
-                    </span>
-                  ))}
-                </div>
-              </section>
+            <div className="space-y-5">
 
-              <section className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
-                <section className="min-w-0 rounded-2xl border border-white/10 bg-white/5 p-4 sm:p-5">
-                  <div className="mb-4 flex items-center justify-between gap-3">
+              {serviceActionMessage ? (
+                <p className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white/80">
+                  {serviceActionMessage}
+                </p>
+              ) : null}
+
+              {waLoginDialogOpen ? (
+                <section className="theme-channel-section">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
                     <div>
-                      <h3 className="text-base font-semibold">{t("把你的外部账号绑进来", "Bind your external account")}</h3>
+                      <h3 className="text-lg font-semibold text-white">{t("WhatsApp Web 登录", "WhatsApp Web login")}</h3>
+                      <p className="mt-1 text-sm text-white/55">
+                        {waLoginStatus?.connected
+                          ? t("当前已经登录，可以继续使用。", "WhatsApp Web is already connected.")
+                          : t("如果二维码已准备好，直接扫码即可。", "If the QR code is ready, scan it now.")}
+                      </p>
                     </div>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setChannelBindingExternalUserId(interactionUserId == null ? "" : String(interactionUserId));
-                        setChannelBindingExternalChatId(interactionChatId == null ? "" : String(interactionChatId));
-                      }}
-                      className="shrink-0 whitespace-nowrap rounded-xl border border-white/15 bg-white/5 px-3 py-2 text-xs hover:bg-white/10"
-                    >
-                      {t("使用本地上下文", "Use local context")}
-                    </button>
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={() => void fetchWhatsappWebLoginStatus()}
+                        disabled={waLoginLoading}
+                        className="theme-secondary-btn"
+                      >
+                        {waLoginLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+                        {t("刷新状态", "Refresh")}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setWaLoginDialogOpen(false)}
+                        className="theme-service-action theme-service-action-stop"
+                      >
+                        {t("收起", "Hide")}
+                      </button>
+                    </div>
                   </div>
 
-                  <div className="grid gap-3 md:grid-cols-2">
-                    <label className="space-y-2">
-                      <span className="text-[10px] uppercase tracking-widest text-white/50">{t("账号来源", "Account source")}</span>
-                      <select
-                        className="theme-input"
-                        value={channelBindingChannel}
-                        onChange={(e) => setChannelBindingChannel(e.target.value as ChannelName)}
+                  <div className="mt-5 rounded-xl border border-white/10 bg-black/20 px-4 py-3">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div>
+                        <p className="text-sm text-white/85">{t("连接状态", "Connection")}</p>
+                        <p className="mt-1 text-xs text-white/45">
+                          {waLoginStatus?.last_update_ts
+                            ? `${t("最近更新", "Updated")} ${toLocalTime(waLoginStatus.last_update_ts * 1000)}`
+                            : t("尚未获取状态", "No status yet")}
+                        </p>
+                      </div>
+                      <span
+                        className={
+                          waLoginStatus?.connected
+                            ? "rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-2 py-1 text-xs text-emerald-200"
+                            : "rounded-lg border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-xs text-amber-200"
+                        }
                       >
-                        <option value="telegram">telegram</option>
-                        <option value="whatsapp">whatsapp</option>
-                        <option value="ui">ui</option>
-                        <option value="feishu">feishu</option>
-                        <option value="lark">lark</option>
-                      </select>
-                    </label>
-                    <div className="rounded-xl border border-white/10 bg-black/20 px-4 py-3 text-sm text-white/80">
-                      <p>{t("当前登录身份", "Current signed-in identity")}</p>
-                      <p className="mt-1 break-all font-mono text-xs text-white/55">{maskedSavedUiKey || "--"}</p>
+                        {waLoginStatus?.connected ? t("已登录", "Connected") : t("未登录", "Not connected")}
+                      </span>
                     </div>
-                    <label className="space-y-2">
-                      <span className="text-[10px] uppercase tracking-widest text-white/50">{t("外部用户 ID", "External user ID")}</span>
-                      <input
-                        className="theme-input"
-                        value={channelBindingExternalUserId}
-                        onChange={(e) => setChannelBindingExternalUserId(e.target.value)}
-                        placeholder={selectedChannelPreset.exampleUser || selectedChannelPreset.userHint}
-                      />
-                    </label>
-                    <label className="space-y-2">
-                      <span className="text-[10px] uppercase tracking-widest text-white/50">{t("外部会话 ID", "External chat ID")}</span>
-                      <input
-                        className="theme-input"
-                        value={channelBindingExternalChatId}
-                        onChange={(e) => setChannelBindingExternalChatId(e.target.value)}
-                        placeholder={selectedChannelPreset.exampleChat || selectedChannelPreset.chatHint}
-                      />
-                    </label>
                   </div>
 
                   <div className="mt-4 rounded-xl border border-white/10 bg-black/20 p-4">
-                    <div className="flex flex-wrap items-start justify-between gap-3">
+                    {waLoginStatus?.connected ? (
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <p className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-200">
+                          {t("WhatsApp Web 已登录，无需扫码。", "WhatsApp Web is already connected.")}
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => void logoutWhatsappWeb()}
+                          disabled={waLogoutLoading}
+                          className="theme-service-action theme-service-action-stop"
+                        >
+                          {waLogoutLoading ? t("处理中", "Working") : t("退出登录", "Logout")}
+                        </button>
+                      </div>
+                    ) : waLoginStatus?.qr_data_url ? (
+                      <div className="inline-block rounded-xl border border-white/15 bg-white p-3">
+                        <img src={waLoginStatus.qr_data_url} alt="WhatsApp QR" className="h-56 w-56" />
+                      </div>
+                    ) : (
+                      <p className="rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-sm text-white/70">
+                        {waLoginLoading
+                          ? t("正在拉取二维码...", "Fetching QR...")
+                          : t("暂无可用二维码，请稍候或重启 WhatsApp Web。", "QR is not ready yet. Please wait or restart WhatsApp Web.")}
+                      </p>
+                    )}
+                    {waLoginStatus?.last_error ? (
+                      <p className="mt-3 text-xs text-amber-300">
+                        {t("最近错误", "Last error")}: {waLoginStatus.last_error}
+                      </p>
+                    ) : null}
+                    {waLoginError ? (
+                      <p className="mt-3 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-200">
+                        {waLoginError}
+                      </p>
+                    ) : null}
+                  </div>
+                </section>
+              ) : null}
+
+              <section id="robot-entry-list" className="theme-channel-section">
+                <div className="flex flex-wrap items-start gap-3">
+                  <Database className="theme-icon-accent mt-0.5 h-4 w-4" />
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-3">
+                      <h3 className="text-lg font-semibold text-white">{t("机器人列表", "Robot list")}</h3>
+                      <span className="theme-service-kpi">{t("在线", "Online")} {telegramBotsOnShiftCount}</span>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={openAddTelegramBotEditor}
+                    className="theme-secondary-btn"
+                  >
+                    <Sparkles className="h-4 w-4" />
+                    {t("新增机器人", "Add robot")}
+                  </button>
+                </div>
+
+                {telegramConfigError ? (
+                  <p className="mt-4 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-200">
+                    {t("机器人配置读取/保存失败", "Robot config read/save failed")}: {telegramConfigError}
+                  </p>
+                ) : null}
+                {telegramConfigSaveMessage ? (
+                  <p className="mt-4 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-200">
+                    {telegramConfigSaveMessage}
+                  </p>
+                ) : null}
+                {telegramRestartNoticeVisible ? (
+                  <div className="mt-4 rounded-2xl border border-amber-500/25 bg-amber-500/10 px-4 py-4">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
                       <div>
-                        <h4 className="text-sm font-semibold">
-                          {channelLabel(channelBindingChannel)}
-                        </h4>
+                        <p className="text-sm font-medium text-amber-100">{t("这些机器人设置等待重启后生效", "These robot settings will apply after restart")}</p>
+                        <p className="mt-1 text-xs text-amber-100/80">
+                          {t("你可以继续修改多个机器人，全部弄好后再统一重启一次。", "You can keep editing multiple robots and restart once after everything is ready.")}
+                        </p>
+                      </div>
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            const restarted = await restartSystem();
+                            if (restarted) {
+                              setTelegramRestartNoticeVisible(false);
+                              setTelegramConfigSaveMessage(
+                                t(
+                                  "RustClaw 已重启完成，机器人设置已经生效。",
+                                  "RustClaw restarted successfully. Robot settings are now active.",
+                                ),
+                              );
+                            }
+                          }}
+                          disabled={systemRestarting}
+                          className="theme-secondary-btn px-3 py-2 text-xs"
+                        >
+                          {systemRestarting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+                          {t("现在重启", "Restart now")}
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
+
+                {telegramBotCards.length > 0 ? (
+                  <div className="mt-6 grid gap-4 lg:grid-cols-2">
+                    {telegramBotCards.map((bot, index) => {
+                      const control = telegramRobotControl(bot);
+                      return (
+                      <article key={bot.name} className="theme-channel-bot-card">
+                        <div className="flex items-start gap-4">
+                          <div className="theme-channel-bot-avatar shrink-0">{bot.monogram}</div>
+                          <div className="min-w-0 flex-1">
+                            <div className="flex flex-wrap items-center gap-3">
+                              <h4 className="text-xl font-semibold tracking-tight text-white">{bot.displayName}</h4>
+                              <span className="rounded-full border border-white/12 bg-white/6 px-3 py-1 text-[11px] text-white/65">
+                                {robotChannelLabel("telegram")}
+                              </span>
+                              <span className="rounded-full border border-white/12 bg-white/6 px-3 py-1 text-[11px] text-white/65">
+                                {t("访问", "Access")}: {telegramAccessModeLabel(bot.access_mode)}
+                              </span>
+                              <span
+                                className={
+                                  bot.statusTone === "emerald"
+                                    ? "rounded-full border border-emerald-400/25 bg-emerald-400/10 px-3 py-1 text-xs text-emerald-200"
+                                    : bot.statusTone === "amber"
+                                      ? "rounded-full border border-amber-400/25 bg-amber-400/10 px-3 py-1 text-xs text-amber-200"
+                                      : "rounded-full border border-white/15 bg-white/8 px-3 py-1 text-xs text-white/70"
+                                }
+                              >
+                                {bot.statusLabel}
+                              </span>
+                            </div>
+                            {bot.description.trim() ? <p className="mt-2 text-sm text-white/65">{bot.description}</p> : null}
+                          </div>
+                        </div>
+
+                        <div className="mt-4 flex flex-wrap gap-2">
+                          {control ? (
+                            <button
+                              type="button"
+                              onClick={() => void controlService(control.serviceName, control.action)}
+                              disabled={Boolean(serviceActionLoading[control.serviceName])}
+                              className={control.className}
+                              title={control.title}
+                            >
+                              {Boolean(serviceActionLoading[control.serviceName]) ? (
+                                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                              ) : null}
+                              {control.label}
+                            </button>
+                          ) : null}
+                          <button
+                            type="button"
+                            onClick={() => openEditTelegramBotEditor(index)}
+                            className="inline-flex items-center gap-2 rounded-xl border border-white/15 bg-white/5 px-3 py-2 text-xs text-white/80 hover:bg-white/10"
+                          >
+                            <Wrench className="h-3.5 w-3.5" />
+                            {t("编辑配置", "Edit settings")}
+                          </button>
+                          {telegramBotCards.length > 0 ? (
+                            <button
+                              type="button"
+                              onClick={() => removeTelegramBotDraft(index)}
+                              className="inline-flex items-center gap-2 rounded-xl border border-red-400/25 bg-red-500/10 px-3 py-2 text-xs text-red-200 hover:bg-red-500/15"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                              {t("删除机器人", "Remove robot")}
+                            </button>
+                          ) : null}
+                        </div>
+
+                        <div className="mt-5 grid gap-3 border-t border-white/10 pt-4 text-sm">
+                          {(bot.access_mode || "public") === "specified" ? (
+                            <div className="grid grid-cols-[92px_minmax(0,1fr)] gap-3">
+                              <p className="text-white/45">{t("允许账号", "Allowed accounts")}</p>
+                              <p className="text-white/72">
+                                {(bot.allowed_telegram_usernames ?? []).length > 0
+                                  ? bot.allowed_telegram_usernames!.map((name) => `@${name}`).join(", ")
+                                  : t("还没有填写", "Not filled yet")}
+                              </p>
+                            </div>
+                          ) : null}
+                          <div className="grid grid-cols-[92px_minmax(0,1fr)] gap-3">
+                            <p className="text-white/45">{t("最近工作时间", "Last activity")}</p>
+                            <p className="text-white/72">
+                              {bot.heartbeatTs ? new Date(bot.heartbeatTs * 1000).toLocaleString() : t("还没有", "Not yet")}
+                            </p>
+                          </div>
+                          {bot.lastError ? (
+                            <div className="grid grid-cols-[92px_minmax(0,1fr)] gap-3">
+                              <p className="text-white/45">{t("最近错误", "Last error")}</p>
+                              <p className="text-amber-200/90">{bot.lastError}</p>
+                            </div>
+                          ) : null}
+                        </div>
+                      </article>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div className="mt-6 rounded-[24px] border border-dashed border-white/12 bg-black/20 px-5 py-6 text-sm text-white/60">
+                    {t(
+                      "当前还没有配置任何机器人。先点上面的“新增机器人”，再把第一个 Token 填进去。",
+                      "No robots are configured yet. Use Add robot above and fill in the first token.",
+                    )}
+                  </div>
+                )}
+              </section>
+
+              {botEditorOpen && botEditorDraft ? (
+                <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-950/72 px-4 py-6 backdrop-blur-sm">
+                  <div className="flex min-h-full items-start justify-center sm:items-center">
+                    <div className="flex w-full max-w-3xl max-h-[calc(100dvh-3rem)] flex-col overflow-hidden rounded-[28px] border border-white/10 bg-[#121722] p-5 shadow-2xl shadow-black/40 sm:p-6">
+                    <div className="flex items-start justify-between gap-4">
+                      <div>
+                        <p className="text-[11px] uppercase tracking-[0.28em] text-white/45">
+                          {botEditorIndex == null ? t("新增机器人", "Add robot") : t("编辑机器人", "Edit robot")}
+                        </p>
+                        <h3 className="mt-2 text-2xl font-semibold text-white">
+                          {botEditorIndex == null
+                            ? t("填写这个机器人的配置", "Set up this robot entry")
+                            : (robotDisplayName(botEditorDraft) || t("未命名机器人", "Unnamed robot"))}
+                        </h3>
+                        <p className="mt-2 text-sm text-white/60">
+                          {t("保存后会直接写入配置；如果需要重启，回到上一层再统一处理。", "Saving writes directly to config. If a restart is needed, handle it from the previous screen later.")}
+                        </p>
                       </div>
                       <button
                         type="button"
-                        onClick={() => {
-                          setInteractionChannel(channelBindingChannel);
-                          setInteractionExternalUserId(channelBindingExternalUserId);
-                          setInteractionExternalChatId(channelBindingExternalChatId);
-                          setCurrentPage("tasks");
-                        }}
-                        className="shrink-0 whitespace-nowrap rounded-xl border border-white/15 bg-white/5 px-3 py-2 text-xs hover:bg-white/10"
+                        onClick={closeBotEditor}
+                        className="inline-flex h-10 w-10 items-center justify-center rounded-2xl border border-white/10 bg-white/5 text-white/70 hover:bg-white/10"
+                        aria-label={t("关闭", "Close")}
                       >
-                        {t("带到任务页", "Send to Tasks")}
+                        <X className="h-4 w-4" />
                       </button>
                     </div>
-                    <div className="mt-4 space-y-3 text-sm text-white/70">
-                      <div className="rounded-xl border border-white/10 bg-[#12151f] px-4 py-3">
-                        <p className="font-medium text-white/85">external_user_id</p>
-                        {selectedChannelPreset.exampleUser ? (
-                          <p className="mt-2 font-mono text-white/45">example: {selectedChannelPreset.exampleUser}</p>
-                        ) : null}
-                      </div>
-                      <div className="rounded-xl border border-white/10 bg-[#12151f] px-4 py-3">
-                        <p className="font-medium text-white/85">external_chat_id</p>
-                        {selectedChannelPreset.exampleChat ? (
-                          <p className="mt-2 font-mono text-white/45">example: {selectedChannelPreset.exampleChat}</p>
-                        ) : null}
-                      </div>
-                    </div>
-                  </div>
 
-                  <div className="mt-4 flex flex-wrap items-center gap-3">
-                    <button
-                      onClick={() => void resolveChannelBinding()}
-                      disabled={channelResolveLoading}
-                      className="theme-accent-btn"
-                    >
-                      {channelResolveLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-                      {t("先查有没有绑定", "Check existing binding")}
-                    </button>
-                    <button
-                      onClick={() => void bindChannelToCurrentKey()}
-                      disabled={channelBindLoading || !uiKey.trim()}
-                      className="theme-secondary-btn"
-                    >
-                      {channelBindLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Database className="h-4 w-4" />}
-                      {t("绑定到当前登录身份", "Bind to current identity")}
-                    </button>
-                  </div>
-
-                  {channelResolveError ? (
-                    <p className="mt-3 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-200">
-                      {tSlash("查询失败 / Resolve failed")}: {channelResolveError}
-                    </p>
-                  ) : null}
-                  {channelBindError ? (
-                    <p className="mt-3 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-200">
-                      {tSlash("绑定失败 / Bind failed")}: {channelBindError}
-                    </p>
-                  ) : null}
-                  {channelBindMessage ? (
-                    <p className="mt-3 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-200">
-                      {channelBindMessage}
-                    </p>
-                  ) : null}
-
-                  <div className="mt-4 rounded-xl border border-white/10 bg-black/20 p-4">
-                    <div className="flex items-center justify-between gap-3">
-                      <h4 className="text-sm font-semibold">{t("结果", "Result")}</h4>
-                      {channelResolveResult ? (
-                        <span
-                          className={
-                            channelResolveResult.bound
-                              ? "rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-2 py-1 text-xs text-emerald-200"
-                              : "rounded-lg border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-xs text-amber-200"
-                          }
+                    <div className="theme-scrollbar mt-6 min-h-0 overflow-y-auto pr-2">
+                      <div className="grid gap-4 md:grid-cols-2">
+                      <label className="space-y-2">
+                        <span className="text-xs uppercase tracking-widest text-white/50">{t("渠道", "Channel")}</span>
+                        <select
+                          className="theme-input"
+                          value={botEditorDraft.channel || "telegram"}
+                          onChange={(e) => updateBotEditorDraft("channel", e.target.value)}
                         >
-                          {channelResolveResult.bound ? tSlash("已绑定 / Bound") : tSlash("未绑定 / Unbound")}
-                        </span>
+                          <option value="telegram">Telegram</option>
+                          <option value="feishu">{`Feishu · ${t("准备中", "Coming soon")}`}</option>
+                          <option value="wechat">{`${t("企业微信", "WeCom")} · ${t("准备中", "Coming soon")}`}</option>
+                        </select>
+                      </label>
+                      <label className="space-y-2">
+                        <span className="text-xs uppercase tracking-widest text-white/50">{t("机器人名称", "Robot name")}</span>
+                        <input
+                          className="theme-input"
+                          autoComplete="off"
+                          autoCorrect="off"
+                          autoCapitalize="none"
+                          spellCheck={false}
+                          name="robot-display-name"
+                          value={robotDisplayName(botEditorDraft)}
+                          onChange={(e) => updateBotEditorDraft("name", e.target.value)}
+                          placeholder={t("例如 销售助手", "For example, Sales assistant")}
+                        />
+                      </label>
+                      <label className="space-y-2">
+                        <span className="text-xs uppercase tracking-widest text-white/50">{t("机器人 Token", "Robot token")}</span>
+                        <input
+                          className="theme-input"
+                          type="text"
+                          autoComplete="new-password"
+                          autoCorrect="off"
+                          autoCapitalize="none"
+                          spellCheck={false}
+                          data-lpignore="true"
+                          data-1p-ignore="true"
+                          data-form-type="other"
+                          name="robot-channel-token"
+                          inputMode="text"
+                          value={botEditorDraft.bot_token || ""}
+                          onChange={(e) => updateBotEditorDraft("bot_token", e.target.value)}
+                          placeholder="123456:ABCDEF"
+                        />
+                      </label>
+                      {(botEditorDraft.channel || "telegram") !== "telegram" ? (
+                        <div className="rounded-2xl border border-amber-400/20 bg-amber-400/10 px-4 py-3 text-sm text-amber-100 md:col-span-2">
+                          {t(
+                            "这个版本已经把新增机器人的渠道选择放进来了，但真正可直接保存的还只有 Telegram。飞书和企业微信等后端配置接好后，这里会直接继续沿用。",
+                            "This version already includes channel selection when adding a robot, but only Telegram can be saved directly right now. Feishu and WeCom will use the same flow once their backend config endpoints are ready.",
+                          )}
+                        </div>
                       ) : null}
-                    </div>
-                    {channelResolveResult ? (
-                      channelResolveResult.identity ? (
-                        <div className="mt-3 grid gap-3 xl:grid-cols-2">
-                          <div className="rounded-xl border border-white/10 bg-[#12151f] px-3 py-2 text-xs text-white/75">
-                            <div className="break-all">user_key: {maskStoredKey(channelResolveResult.identity.user_key, 8)}</div>
-                            <div className="mt-1">role: {channelResolveResult.identity.role}</div>
+                      <label className="space-y-2">
+                        <span className="text-xs uppercase tracking-widest text-white/50">{t("使用哪个大模型", "Which model vendor")}</span>
+                        <select
+                          className="theme-input"
+                          value={botEditorDraft.preferred_vendor || ""}
+                          onChange={(e) => updateBotEditorDraft("preferred_vendor", e.target.value)}
+                        >
+                          <option value="">{t("跟随全局默认", "Follow global default")}</option>
+                          {agentLlmOptions.map((option) => (
+                            <option key={option.vendor} value={option.vendor}>
+                              {option.label}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <label className="space-y-2">
+                        <span className="text-xs uppercase tracking-widest text-white/50">{t("模型", "Model")}</span>
+                        <select
+                          className="theme-input"
+                          value={botEditorDraft.preferred_model || ""}
+                          onChange={(e) => updateBotEditorDraft("preferred_model", e.target.value)}
+                          disabled={!(botEditorDraft.preferred_vendor || "").trim()}
+                        >
+                          <option value="">
+                            {(botEditorDraft.preferred_vendor || "").trim() ? t("请选择模型", "Choose a model") : t("跟随全局默认", "Follow global default")}
+                          </option>
+                          {(agentLlmOptions.find((option) => option.vendor === (botEditorDraft.preferred_vendor || "").trim())?.models ?? []).map((model) => (
+                            <option key={model} value={model}>
+                              {model}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <label className="space-y-2 md:col-span-2">
+                        <span className="text-xs uppercase tracking-widest text-white/50">{t("机器人描述", "Robot description")}</span>
+                        <input
+                          className="theme-input"
+                          autoComplete="off"
+                          autoCorrect="off"
+                          autoCapitalize="sentences"
+                          value={botEditorDraft.description || ""}
+                          onChange={(e) => updateBotEditorDraft("description", e.target.value)}
+                          placeholder={t("例如 负责客服答疑和日常接待", "For example, handles support questions and daily replies")}
+                        />
+                      </label>
+                      <div className="space-y-3 md:col-span-2 rounded-2xl border border-white/10 bg-black/20 p-4">
+                        <div className="flex flex-wrap items-start justify-between gap-3">
+                          <div>
+                            <p className="text-xs uppercase tracking-widest text-white/50">{t("允许访问类型", "Access type")}</p>
+                            <p className="mt-1 text-[11px] text-white/45">
+                              {t("公开表示任何 Telegram 用户都能直接问；指定人员表示只有你填在下面的账号才会收到机器人回复。", "Public means any Telegram user can ask directly. Specified means only the accounts listed below can get replies.")}
+                            </p>
                           </div>
-                          <div className="rounded-xl border border-white/10 bg-[#12151f] px-3 py-2 text-xs text-white/75">
-                            <div className="break-all">user_id: {channelResolveResult.identity.user_id}</div>
-                            <div className="mt-1 break-all">chat_id: {channelResolveResult.identity.chat_id}</div>
+                          <label className="min-w-[180px] max-w-[220px] space-y-2">
+                            <span className="text-[11px] uppercase tracking-widest text-white/40">{t("访问方式", "Mode")}</span>
+                            <select
+                              className="theme-input"
+                              value={botEditorDraft.access_mode || "public"}
+                              onChange={(e) => updateBotEditorDraft("access_mode", e.target.value)}
+                            >
+                              <option value="public">{t("公开", "Public")}</option>
+                              <option value="specified">{t("指定人员", "Specified people")}</option>
+                            </select>
+                          </label>
+                        </div>
+                        {(botEditorDraft.access_mode || "public") === "specified" ? (
+                          <label className="space-y-2">
+                            <span className="text-xs uppercase tracking-widest text-white/50">{t("Telegram 账号", "Telegram accounts")}</span>
+                            <div className="rounded-2xl border border-white/10 bg-[#0f131c] px-3 py-3">
+                              <div className="flex flex-wrap gap-2">
+                                {(botEditorDraft.allowed_telegram_usernames ?? []).map((username) => (
+                                  <span
+                                    key={username}
+                                    className="inline-flex items-center gap-2 rounded-full border border-emerald-400/20 bg-emerald-400/10 px-3 py-1.5 text-xs text-emerald-100"
+                                  >
+                                    <span>@{username}</span>
+                                    <button
+                                      type="button"
+                                      onClick={() => removeBotEditorTelegramUsername(username)}
+                                      className="text-emerald-100/70 transition hover:text-emerald-50"
+                                      aria-label={`${t("删除账号", "Remove account")} @${username}`}
+                                    >
+                                      <X className="h-3.5 w-3.5" />
+                                    </button>
+                                  </span>
+                                ))}
+                              </div>
+                              <input
+                                className="mt-3 w-full border-0 bg-transparent px-0 py-0 text-sm text-white outline-none placeholder:text-white/30"
+                                autoComplete="off"
+                                autoCorrect="off"
+                                autoCapitalize="none"
+                                spellCheck={false}
+                                value={botEditorUsernameInput}
+                                onChange={(e) => setBotEditorUsernameInput(e.target.value)}
+                                onKeyDown={(e) => {
+                                  if (e.key === "Enter" || e.key === "," || e.key === " ") {
+                                    e.preventDefault();
+                                    addBotEditorTelegramUsername(botEditorUsernameInput);
+                                  } else if (e.key === "Backspace" && !botEditorUsernameInput.trim()) {
+                                    const last = (botEditorDraft.allowed_telegram_usernames ?? []).at(-1);
+                                    if (last) {
+                                      removeBotEditorTelegramUsername(last);
+                                    }
+                                  }
+                                }}
+                                onBlur={() => addBotEditorTelegramUsername(botEditorUsernameInput)}
+                                placeholder={t("输入 @alice 后按回车", "Type @alice and press Enter")}
+                              />
+                            </div>
+                            <p className="text-[11px] leading-5 text-white/45">
+                              {t("输入后按回车、逗号或空格就会加入标签。系统会自动去掉 @ 并忽略大小写。管理员和旧 allowlist 里的 ID 也会继续放行。", "Press Enter, comma, or space after typing to add a tag. The system will automatically remove @ and ignore case. Admins and legacy allowlist IDs will also continue to pass.")}
+                            </p>
+                          </label>
+                        ) : null}
+                      </div>
+                      <label className="space-y-2 md:col-span-2">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <span className="text-xs uppercase tracking-widest text-white/50">{t("人设 / 系统提示词", "Persona / system prompt")}</span>
+                          <span className="text-[11px] text-white/45">{t("可先套用一个常用预设，再按你的口吻微调。", "Start from a preset, then adjust the tone if needed.")}</span>
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          {robotPersonaPresets.map((preset) => (
+                            <button
+                              key={preset.id}
+                              type="button"
+                              onClick={() => applyRobotPersonaPreset(preset)}
+                              className="rounded-full border border-white/12 bg-white/5 px-3 py-1.5 text-xs text-white/75 transition hover:bg-white/10"
+                            >
+                              {preset.label}
+                            </button>
+                          ))}
+                        </div>
+                        <textarea
+                          className="theme-input min-h-[120px]"
+                          autoComplete="off"
+                          autoCorrect="off"
+                          autoCapitalize="sentences"
+                          spellCheck={false}
+                          name="robot-persona-prompt"
+                          value={botEditorDraft.persona_prompt || ""}
+                          onChange={(e) => updateBotEditorDraft("persona_prompt", e.target.value)}
+                          placeholder={t("告诉 RustClaw 这个 bot 背后的角色是谁、回答风格是什么。", "Describe who this bot is and how it should respond.")}
+                        />
+                      </label>
+                      <div className="space-y-2 md:col-span-2">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <span className="text-xs uppercase tracking-widest text-white/50">{t("技能范围", "Skill scope")}</span>
+                          <span className="text-[11px] text-white/45">
+                            {t("默认建议跟随系统设置，小白用户一般不用自己手填技能名。", "Following the system default is recommended. Most users do not need to type skill names manually.")}
+                          </span>
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          <button
+                            type="button"
+                            onClick={() => applyRobotSkillMode("inherit")}
+                            className={
+                              botEditorSkillMode === "inherit"
+                                ? "rounded-full border border-emerald-400/25 bg-emerald-400/10 px-3 py-1.5 text-xs text-emerald-200"
+                                : "rounded-full border border-white/12 bg-white/5 px-3 py-1.5 text-xs text-white/75 transition hover:bg-white/10"
+                            }
+                          >
+                            {t("跟随系统默认", "Follow system default")}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => applyRobotSkillMode("common")}
+                            className={
+                              botEditorSkillMode === "common"
+                                ? "rounded-full border border-emerald-400/25 bg-emerald-400/10 px-3 py-1.5 text-xs text-emerald-200"
+                                : "rounded-full border border-white/12 bg-white/5 px-3 py-1.5 text-xs text-white/75 transition hover:bg-white/10"
+                            }
+                          >
+                            {t("常用能力", "Common abilities")}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => applyRobotSkillMode("custom")}
+                            className={
+                              botEditorSkillMode === "custom"
+                                ? "rounded-full border border-emerald-400/25 bg-emerald-400/10 px-3 py-1.5 text-xs text-emerald-200"
+                                : "rounded-full border border-white/12 bg-white/5 px-3 py-1.5 text-xs text-white/75 transition hover:bg-white/10"
+                            }
+                          >
+                            {t("自定义", "Custom")}
+                          </button>
+                        </div>
+                        {botEditorSkillMode === "inherit" ? (
+                          <p className="rounded-xl border border-white/10 bg-black/20 px-4 py-3 text-sm text-white/70">
+                            {t(
+                              "当前会跟随系统里已经启用的技能。留空不是没效果，而是沿用整套系统默认能力。",
+                              "This robot will follow the skills already enabled in the system. Leaving it blank does not disable skills; it inherits the system default set.",
+                            )}
+                          </p>
+                        ) : null}
+                        {botEditorSkillMode === "common" ? (
+                          <div className="rounded-xl border border-white/10 bg-black/20 px-4 py-3">
+                            <p className="text-sm text-white/70">
+                              {t("当前只保留一组更适合普通对话的常用能力。", "This keeps a smaller set of abilities that fits everyday conversations better.")}
+                            </p>
+                            <div className="mt-3 flex flex-wrap gap-2">
+                              {beginnerRobotSkillPreset.map((skill) => (
+                                <span key={skill} className="rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-[11px] text-white/70">
+                                  {skill}
+                                </span>
+                              ))}
+                            </div>
                           </div>
-                        </div>
-                      ) : (
-                        <p className="mt-3 text-sm text-white/50">{t("未绑定", "Unbound")}</p>
-                      )
-                    ) : (
-                      <p className="mt-3 text-sm text-white/50">
-                        {t("还没有执行查询。", "No resolution has been run yet.")}
-                      </p>
-                    )}
-                  </div>
-                </section>
-
-                <aside className="min-w-0 rounded-2xl border border-white/10 bg-white/5 p-4 sm:p-5">
-                  <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-                    <h3 className="text-base font-semibold">{t("快速诊断", "Quick diagnostics")}</h3>
-                    <button onClick={() => void refreshDiagnostics()} disabled={diagnosticsRefreshing} className="shrink-0 whitespace-nowrap theme-accent-soft-btn">
-                      {diagnosticsRefreshing ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-                      {t("刷新诊断", "Refresh diagnostics")}
-                    </button>
-                  </div>
-
-                  <div className="space-y-3">
-                    <div className="rounded-xl border border-white/10 bg-black/20 px-4 py-3">
-                      <p className="text-[10px] uppercase tracking-widest text-white/45">{t("当前身份", "Current identity")}</p>
-                      <p className="mt-2 text-sm text-white/85">
-                        {authIdentity ? `${authIdentity.role} / user_id=${authIdentity.user_id}` : authMeLoading ? t("读取中...", "Loading...") : t("暂无数据", "No data")}
-                      </p>
-                      <p className="mt-1 text-xs text-white/45 break-all">
-                        {authMeError || maskStoredKey(authIdentity?.user_key || "", 8) || "--"}
-                      </p>
-                    </div>
-                    <div className="rounded-xl border border-white/10 bg-black/20 px-4 py-3">
-                      <p className="text-[10px] uppercase tracking-widest text-white/45">{t("绑定情况", "Binding status")}</p>
-                      <p className="mt-2 text-sm text-white/85">
-                        {channelResolveResult
-                          ? channelResolveResult.bound
-                            ? t("这个账号已经绑定过", "This account is already bound")
-                            : t("这个账号还没有绑定", "This account is not bound yet")
-                          : t("还没查询", "Not checked yet")}
-                      </p>
-                      <p className="mt-1 text-xs text-white/45">
-                        {t("已绑定渠道", "bound channels")}: {health?.bound_channel_count ?? "--"}
-                      </p>
-                    </div>
-                    <div className="rounded-xl border border-white/10 bg-black/20 px-4 py-3">
-                      <p className="text-[10px] uppercase tracking-widest text-white/45">{t("服务状态", "Service health")}</p>
-                      <p className="mt-2 text-sm text-white/85">
-                        {isOnline ? t("RustClaw 可访问", "RustClaw is reachable") : t("RustClaw 当前不可访问", "RustClaw is currently unreachable")}
-                      </p>
-                      <p className="mt-1 text-xs text-white/45">
-                        whatsapp-web: {waLoginStatus?.connected ? t("已登录", "connected") : t("未登录", "not connected")}
-                      </p>
-                    </div>
-                  </div>
-
-                  <details className="group mt-4 rounded-xl border border-white/10 bg-[#12151f] p-4">
-                    <summary className="flex cursor-pointer list-none items-center gap-2 text-sm font-semibold text-white">
-                      <span>{t("详细诊断", "Detailed diagnostics")}</span>
-                      <span className="ml-auto text-[11px] font-medium text-white/45">
-                        <span className="group-open:hidden">{t("点击展开", "Click to expand")}</span>
-                        <span className="hidden group-open:inline">{t("点击收起", "Click to collapse")}</span>
-                      </span>
-                      <ChevronDown className="h-4 w-4 text-white/55 transition group-open:rotate-180" />
-                    </summary>
-                    <div className="mt-4 grid gap-3 lg:grid-cols-2">
-                      <div className="rounded-xl border border-white/10 bg-black/20 px-4 py-3">
-                        <p className="text-[10px] uppercase tracking-widest text-white/45">auth/me</p>
-                        {authIdentity ? (
-                          <div className="mt-2 space-y-1 text-sm text-white/85">
-                            <p>role: {authIdentity.role}</p>
-                            <p className="break-all">user_id: {authIdentity.user_id}</p>
-                            <p className="break-all text-xs text-white/45">key: {maskStoredKey(authIdentity.user_key, 8)}</p>
+                        ) : null}
+                        {botEditorSkillMode === "custom" ? (
+                          <div className="rounded-xl border border-white/10 bg-black/20 p-3">
+                            <p className="text-sm text-white/70">
+                              {t("默认已经全选。把你不想给这个机器人的能力取消勾选就行。", "Everything is selected by default. Simply uncheck the abilities you do not want this robot to use.")}
+                            </p>
+                            <div className="theme-scrollbar mt-3 max-h-72 overflow-y-auto pr-2">
+                              <div className="grid gap-2 sm:grid-cols-2">
+                                {managedSkills.map((skill) => {
+                                  const enabled = (botEditorDraft.allowed_skills ?? []).includes(skill);
+                                  return (
+                                    <label
+                                      key={skill}
+                                      className="flex items-start gap-3 rounded-xl border border-white/10 bg-white/5 px-3 py-3 text-sm text-white/85"
+                                    >
+                                      <input
+                                        type="checkbox"
+                                        className="mt-1 h-4 w-4 rounded border-white/20 bg-transparent"
+                                        checked={enabled}
+                                        onChange={(e) => toggleBotEditorSkill(skill, e.target.checked)}
+                                      />
+                                      <span className="min-w-0">
+                                        <span className="block break-words text-sm font-medium text-white/90">{skill}</span>
+                                        <span className="mt-1 block text-[11px] leading-5 text-white/50">{describeSkill(skill)}</span>
+                                      </span>
+                                    </label>
+                                  );
+                                })}
+                              </div>
+                            </div>
                           </div>
-                        ) : (
-                          <p className="mt-2 text-sm text-white/85">{authMeLoading ? t("读取中...", "Loading...") : authMeError || t("暂无数据", "No data")}</p>
-                        )}
+                        ) : null}
                       </div>
-                      <div className="rounded-xl border border-white/10 bg-black/20 px-4 py-3">
-                        <p className="text-[10px] uppercase tracking-widest text-white/45">{tSlash("本地上下文 / Local Context")}</p>
-                        <div className="mt-2 space-y-1 text-sm text-white/85">
-                          <p className="break-all">user_id: {interactionUserId == null ? "--" : interactionUserId}</p>
-                          <p className="break-all">chat_id: {interactionChatId == null ? "--" : interactionChatId}</p>
-                          <p className="text-xs text-white/45">role: {interactionRole}</p>
-                          {localContextError ? <p className="text-xs text-red-300">{localContextError}</p> : null}
-                        </div>
-                      </div>
-                      <div className="rounded-xl border border-white/10 bg-black/20 px-4 py-3">
-                        <p className="text-[10px] uppercase tracking-widest text-white/45">/v1/health</p>
-                        <p className="mt-2 text-sm text-white/85">
-                          {isOnline ? t("可访问", "Reachable") : t("不可访问", "Unreachable")}
-                        </p>
-                        <div className="mt-1 space-y-1 text-xs text-white/45">
-                          <p>{t("已绑定渠道", "bound channels")}: {health?.bound_channel_count ?? "--"}</p>
-                          <p>{t("用户 key", "keys")}: {health?.user_count ?? "--"}</p>
-                        </div>
-                      </div>
-                      <div className="rounded-xl border border-white/10 bg-black/20 px-4 py-3">
-                        <p className="text-[10px] uppercase tracking-widest text-white/45">whatsapp-web</p>
-                        <p className="mt-2 text-sm text-white/85">
-                          {waLoginStatus?.connected ? t("已登录", "Connected") : t("未登录", "Not connected")}
-                        </p>
-                        <p className="mt-1 text-xs text-white/45">
-                          {waLoginStatus?.last_error || (waLoginStatus?.qr_ready ? t("二维码已就绪", "QR ready") : t("等待二维码", "Waiting for QR"))}
-                        </p>
-                      </div>
+                    </div>
                     </div>
 
-                    <div className="mt-4 rounded-xl border border-white/10 bg-black/20 p-4">
-                      <h4 className="text-sm font-semibold">{t("建议排查顺序", "Suggested troubleshooting order")}</h4>
-                      <ol className="mt-3 list-decimal space-y-2 pl-5 text-sm text-white/70">
-                        <li>{t("先确认 auth/me 和本地上下文能拿到同一套身份。", "Confirm auth/me and local context resolve to the same identity.")}</li>
-                        <li>{t("再查询具体渠道 external_user_id / external_chat_id 是否已绑定。", "Resolve the target external_user_id / external_chat_id for the channel.")}</li>
-                        <li>{t("如果未绑定，就用当前 key 直接执行绑定。", "If unbound, bind it to the current key.")}</li>
-                        <li>{t("最后回到连接状态页检查服务和登录状态。", "Then return to Connections to verify service and login state.")}</li>
-                      </ol>
+                    <div className="mt-6 flex flex-wrap items-center justify-between gap-3 border-t border-white/10 pt-5">
+                      <p className="text-xs text-white/45">
+                        {t("这里不会立刻重启服务。你可以继续改别的机器人，最后再统一重启。", "This will not restart services immediately. You can keep editing other robots and restart once at the end.")}
+                      </p>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <button type="button" onClick={closeBotEditor} className="theme-secondary-btn px-4 py-2 text-xs">
+                          {t("取消", "Cancel")}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => void saveBotEditorDraft()}
+                          disabled={!robotChannelSaveSupported(botEditorDraft.channel) || telegramConfigSaving}
+                          className="theme-accent-btn px-4 py-2 text-xs disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          {telegramConfigSaving ? t("保存中", "Saving") : t("保存到列表", "Save to list")}
+                        </button>
+                      </div>
                     </div>
-                  </details>
-                </aside>
-              </section>
+                  </div>
+                </div>
+                </div>
+              ) : null}
+
             </div>
           ) : null}
 
@@ -3503,6 +5106,10 @@ export default function App() {
                     <input type="checkbox" checked={chatAgentMode} onChange={(e) => setChatAgentMode(e.target.checked)} />
                     agent_mode
                   </label>
+                  <label className="inline-flex items-center gap-2 text-white/80">
+                    <input type="checkbox" checked={debugModeEnabled} onChange={(e) => setDebugModeEnabled(e.target.checked)} />
+                    {t("调试模式", "Debug mode")}
+                  </label>
                   <button
                     onClick={() =>
                       setChatMessages([
@@ -3571,7 +5178,262 @@ export default function App() {
                   {t("聊天错误", "Chat error")}: {chatError}
                 </p>
               ) : null}
+              {renderTaskDebugPanel()}
             </section>
+          ) : null}
+
+          {currentPage === "usage" ? (
+            <>
+              <section className="theme-panel p-5">
+                <div className="flex flex-wrap items-start justify-between gap-4">
+                  <div className="max-w-3xl">
+                    <p className="theme-kicker text-[11px] uppercase tracking-[0.24em]">{t("使用记录", "Usage history")}</p>
+                    <h3 className="mt-2 text-lg font-semibold text-white">{t("每一次真实请求，都能在这里回看", "Review every real request here")}</h3>
+                    <p className="mt-2 text-sm leading-6 text-white/60">
+                      {t(
+                        "这里只保留今天的真实模型请求。列表先看摘要，点开某一条再用弹窗看完整参数和返回。",
+                        "This page keeps today's real model requests only. Scan the summary list first, then open any row in a dialog for full parameters and responses.",
+                      )}
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap gap-3">
+                    <button type="button" onClick={() => void fetchUsageRecords()} disabled={usageRecordsLoading} className="theme-accent-btn">
+                      {usageRecordsLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+                      {t("刷新记录", "Refresh")}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setUsageSearchQuery("");
+                        setUsageChannelFilter("all");
+                        setUsageStatusFilter("all");
+                        setUsagePage(1);
+                      }}
+                      className="theme-secondary-btn px-4 py-2 text-sm"
+                    >
+                      {t("清空筛选", "Reset filters")}
+                    </button>
+                  </div>
+                </div>
+
+                <div className="mt-5 grid gap-4 xl:grid-cols-4 md:grid-cols-2">
+                  <div className="rounded-[24px] border border-white/10 bg-white/6 px-5 py-4">
+                    <div className="flex items-center gap-3">
+                      <div className="rounded-2xl bg-sky-500/12 p-3 text-sky-200">
+                        <FileText className="h-5 w-5" />
+                      </div>
+                      <div>
+                        <p className="text-xs uppercase tracking-widest text-white/40">{t("请求数", "Requests")}</p>
+                        <p className="mt-1 text-2xl font-semibold text-white">{formatInteger(usageStats.total_requests, lang === "zh" ? "zh-CN" : "en-US")}</p>
+                        <p className="mt-1 text-xs text-white/45">{t("今天符合筛选条件", "Today's matching records")}</p>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="rounded-[24px] border border-white/10 bg-white/6 px-5 py-4">
+                    <div className="flex items-center gap-3">
+                      <div className="rounded-2xl bg-amber-500/12 p-3 text-amber-200">
+                        <Sparkles className="h-5 w-5" />
+                      </div>
+                      <div>
+                        <p className="text-xs uppercase tracking-widest text-white/40">{t("总 Tokens", "Total tokens")}</p>
+                        <p className="mt-1 text-2xl font-semibold text-white">{formatCompactInteger(usageStats.total_tokens, lang === "zh" ? "zh-CN" : "en-US")}</p>
+                        <p className="mt-1 text-xs text-white/45">
+                          {t("输入", "Prompt")} {formatCompactInteger(usageStats.prompt_tokens, lang === "zh" ? "zh-CN" : "en-US")} · {t("输出", "Completion")} {formatCompactInteger(usageStats.completion_tokens, lang === "zh" ? "zh-CN" : "en-US")}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="rounded-[24px] border border-white/10 bg-white/6 px-5 py-4">
+                    <div className="flex items-center gap-3">
+                      <div className="rounded-2xl bg-emerald-500/12 p-3 text-emerald-200">
+                        <MessageCircle className="h-5 w-5" />
+                      </div>
+                      <div>
+                        <p className="text-xs uppercase tracking-widest text-white/40">{t("成功请求", "Successful requests")}</p>
+                        <p className="mt-1 text-2xl font-semibold text-white">{formatInteger(usageStats.success_requests, lang === "zh" ? "zh-CN" : "en-US")}</p>
+                        <p className="mt-1 text-xs text-white/45">{t("模型返回成功", "Model returned successfully")}</p>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="rounded-[24px] border border-white/10 bg-white/6 px-5 py-4">
+                    <div className="flex items-center gap-3">
+                      <div className="rounded-2xl bg-rose-500/12 p-3 text-rose-200">
+                        <AlertCircle className="h-5 w-5" />
+                      </div>
+                      <div>
+                        <p className="text-xs uppercase tracking-widest text-white/40">{t("失败请求", "Failed requests")}</p>
+                        <p className="mt-1 text-2xl font-semibold text-white">{formatInteger(usageStats.failed_requests, lang === "zh" ? "zh-CN" : "en-US")}</p>
+                        <p className="mt-1 text-xs text-white/45">{t("包含报错或异常返回", "Includes errors or abnormal responses")}</p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="mt-5 grid gap-3 xl:grid-cols-[minmax(0,1.4fr)_minmax(240px,0.8fr)_minmax(200px,0.7fr)_auto]">
+                  <label className="space-y-2">
+                    <span className="text-[10px] uppercase tracking-widest text-white/45">{t("按内容查找", "Search")}</span>
+                    <input
+                      className="theme-input"
+                      value={usageSearchQuery}
+                      onChange={(e) => {
+                        setUsageSearchQuery(e.target.value);
+                        setUsagePage(1);
+                      }}
+                      placeholder={t("搜 task_id、消息内容、模型名、机器人名", "Search task_id, message, model, or robot name")}
+                    />
+                  </label>
+                  <label className="space-y-2">
+                    <span className="text-[10px] uppercase tracking-widest text-white/45">{t("渠道", "Channel")}</span>
+                    <select className="theme-input" value={usageChannelFilter} onChange={(e) => {
+                      setUsageChannelFilter(e.target.value);
+                      setUsagePage(1);
+                    }}>
+                      {usageChannelOptions.map((value) => (
+                        <option key={value} value={value}>
+                          {value === "all" ? t("全部渠道", "All channels") : usageChannelLabel(value)}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="space-y-2">
+                    <span className="text-[10px] uppercase tracking-widest text-white/45">{t("结果", "Result")}</span>
+                    <select className="theme-input" value={usageStatusFilter} onChange={(e) => {
+                      setUsageStatusFilter(e.target.value);
+                      setUsagePage(1);
+                    }}>
+                      <option value="all">{t("全部结果", "All results")}</option>
+                      <option value="success">{t("只看成功", "Success only")}</option>
+                      <option value="failed">{t("只看失败", "Failed only")}</option>
+                    </select>
+                  </label>
+                  <div className="flex items-end text-xs text-white/45">
+                    {usageRecordsData
+                      ? t(
+                          `这里只显示今天的记录，每页 ${usagePagination?.page_size ?? 20} 条。`,
+                          `Only today's records are shown here, ${usagePagination?.page_size ?? 20} per page.`,
+                        )
+                      : t("刷新后会显示今天的请求记录。", "Refresh to load today's request history.")}
+                  </div>
+                </div>
+              </section>
+
+              {usageRecordsError ? (
+                <section className="rounded-2xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-200">
+                  {usageRecordsError}
+                </section>
+              ) : null}
+
+              <section className="theme-panel overflow-hidden">
+                  <div className="border-b border-white/10 px-5 py-4">
+                    <h3 className="text-base font-semibold text-white">{t("请求列表", "Request list")}</h3>
+                    <p className="mt-1 text-sm text-white/55">
+                      {t(
+                        "一行就是一条完整请求。先看消息内容、最终状态和总消耗，点开后再看整条模型调用链路。",
+                        "Each row is one full request. Start with the message, final status, and total usage, then open it to inspect the full model-call chain.",
+                      )}
+                    </p>
+                  </div>
+
+                  {!usageRecordsLoading && usageRecords.length === 0 ? (
+                    <div className="px-5 py-10 text-center text-sm leading-7 text-white/60">
+                      {usageRecordsData
+                        ? t("当前筛选条件下还没有记录。你可以放宽筛选条件，或者先给机器人发一条消息。", "No records match the current filters. Try broader filters or send a message to your robot first.")
+                        : t("还没有加载到请求记录。点上面的刷新按钮即可读取。", "No request history has been loaded yet. Use the refresh button above to fetch it.")}
+                    </div>
+                  ) : null}
+
+                  {usageRecords.length > 0 ? (
+                    <>
+                    <div className="theme-scrollbar max-h-[900px] overflow-auto">
+                      <div className="hidden grid-cols-[170px_minmax(0,1.8fr)_160px_132px_150px] gap-3 border-b border-white/10 bg-black/15 px-5 py-3 text-[11px] uppercase tracking-[0.22em] text-white/40 lg:grid">
+                        <span>{t("时间 / 渠道", "Time / Channel")}</span>
+                        <span>{t("请求内容", "Request")}</span>
+                        <span>{t("模型", "Model")}</span>
+                        <span>{t("Tokens", "Tokens")}</span>
+                        <span>{t("状态 / 操作", "Status / Action")}</span>
+                      </div>
+
+                      {usageRecords.map((record) => {
+                        return (
+                          <button
+                            key={record.record_id}
+                            type="button"
+                            onClick={() => setSelectedUsageRecordId(record.record_id)}
+                            className="grid w-full gap-3 border-b border-white/6 px-5 py-4 text-left transition hover:bg-white/6 lg:grid-cols-[170px_minmax(0,1.8fr)_160px_132px_150px]"
+                          >
+                            <div className="space-y-1">
+                              <p className="text-sm text-white/82">{record.ts ? toLocalDateTime(record.ts * 1000) : "--"}</p>
+                              <div className="flex flex-wrap items-center gap-2 text-xs text-white/50">
+                                <span className="rounded-full border border-white/10 bg-white/5 px-2 py-1">{usageChannelLabel(record.channel)}</span>
+                                {record.telegram_bot_name ? <span>{record.telegram_bot_name}</span> : null}
+                              </div>
+                            </div>
+                            <div className="min-w-0">
+                              <p className="line-clamp-2 text-sm font-medium leading-6 text-white">{record.request_text || t("这条请求没有记录到用户原文。", "This request has no captured user text.")}</p>
+                              <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-white/45">
+                                <span>task_id: <span className="font-mono text-white/65">{record.task_id}</span></span>
+                                {record.external_chat_id ? <span>{t("会话", "Chat")}: {record.external_chat_id}</span> : null}
+                                {record.external_user_id ? <span>{t("用户", "User")}: {record.external_user_id}</span> : null}
+                                <span>{t("链路", "Chain")}: {record.llm_call_count}</span>
+                              </div>
+                            </div>
+                            <div className="space-y-1">
+                              <p className="text-sm text-white/82">{record.model || "--"}</p>
+                              <p className="text-xs text-white/45">{record.provider || record.vendor || "--"}</p>
+                            </div>
+                            <div className="space-y-1">
+                              <p className="text-sm text-white/82">{formatCompactInteger(record.total_tokens, lang === "zh" ? "zh-CN" : "en-US")}</p>
+                              <p className="text-xs text-white/45">
+                                {t("入", "In")} {formatCompactInteger(record.prompt_tokens, lang === "zh" ? "zh-CN" : "en-US")} · {t("出", "Out")} {formatCompactInteger(record.completion_tokens, lang === "zh" ? "zh-CN" : "en-US")}
+                              </p>
+                            </div>
+                            <div className="space-y-2">
+                              <span className={`inline-flex rounded-full border px-2.5 py-1 text-xs ${record.status === "ok" ? "border-emerald-400/20 bg-emerald-400/10 text-emerald-100" : "border-rose-400/20 bg-rose-400/10 text-rose-100"}`}>
+                                {usageStatusLabel(record.status)}
+                              </span>
+                              <p className="line-clamp-2 text-xs text-white/45">{record.error || record.prompt_file || "--"}</p>
+                              <p className="text-xs font-medium text-[#ffb08a]">{t("点击查看完整链路", "Click to open full chain")}</p>
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <div className="flex flex-wrap items-center justify-between gap-3 border-t border-white/10 px-5 py-4">
+                      <p className="text-sm text-white/55">
+                        {usagePagination && usagePagination.total_records > 0
+                          ? t(
+                              `今天共 ${usagePagination.total_records} 条，当前第 ${usagePagination.page} / ${Math.max(usagePagination.total_pages, 1)} 页。`,
+                              `${usagePagination.total_records} records today, page ${usagePagination.page} of ${Math.max(usagePagination.total_pages, 1)}.`,
+                            )
+                          : t("今天还没有可展示的记录。", "There are no records to show today.")}
+                      </p>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setUsagePage((value) => Math.max(1, value - 1))}
+                          disabled={usageRecordsLoading || (usagePagination?.page ?? 1) <= 1}
+                          className="theme-secondary-btn px-4 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          {t("上一页", "Previous")}
+                        </button>
+                        <span className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-white/70">
+                          {(usagePagination?.page ?? 1)} / {Math.max(usagePagination?.total_pages ?? 1, 1)}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => setUsagePage((value) => value + 1)}
+                          disabled={usageRecordsLoading || (usagePagination?.page ?? 1) >= (usagePagination?.total_pages ?? 1)}
+                          className="theme-secondary-btn px-4 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          {t("下一页", "Next")}
+                        </button>
+                      </div>
+                    </div>
+                    </>
+                  ) : null}
+              </section>
+              {renderUsageRecordModal()}
+            </>
           ) : null}
 
           {currentPage === "logs" ? (
@@ -3601,6 +5463,7 @@ export default function App() {
                     <option value="routing.log">routing.log</option>
                     <option value="act_plan.log">act_plan.log</option>
                     <option value="clawd.log">clawd.log</option>
+                    <option value="channel-gateway.log">channel-gateway.log</option>
                     <option value="telegramd.log">telegramd.log</option>
                     <option value="whatsappd.log">whatsappd.log</option>
                     <option value="whatsapp_webd.log">whatsapp_webd.log</option>
@@ -3658,7 +5521,7 @@ export default function App() {
                   </button>
                   <button type="button" onClick={() => setCurrentPage("channels")} className="theme-accent-soft-btn">
                     <Database className="h-4 w-4" />
-                    {t("先去绑定账号", "Open Bind Accounts")}
+                    {t("先去机器人设置", "Open Robot Settings")}
                   </button>
                 </div>
               </section>
@@ -3708,6 +5571,23 @@ export default function App() {
                       placeholder="telegram_bot / whatsapp_cloud / whatsapp_web / feishu"
                     />
                   </label>
+                  {interactionChannel === "telegram" ? (
+                    <label className="space-y-2">
+                      <span className="text-xs uppercase tracking-widest text-white/50">{t("Telegram 机器人（必选）", "Telegram robot (required)")}</span>
+                      <select
+                        className="theme-input"
+                        value={interactionTelegramBotName}
+                        onChange={(e) => setInteractionTelegramBotName(e.target.value)}
+                      >
+                        <option value="">{t("请选择要发回的机器人", "Choose the robot that must reply")}</option>
+                        {(health?.telegram_configured_bot_names ?? []).map((name) => (
+                          <option key={name} value={name}>
+                            {name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  ) : null}
                   <label className="space-y-2">
                     <span className="text-xs uppercase tracking-widest text-white/50">{t("外部用户 ID（可选）", "External user ID (optional)")}</span>
                     <input
@@ -3790,52 +5670,6 @@ export default function App() {
                 ) : null}
               </section>
 
-              <section className="rounded-2xl border border-white/10 bg-white/5 p-5">
-                <h3 className="mb-4 text-lg font-semibold">{t("按 task_id 查询结果", "Query a result by task_id")}</h3>
-                <div className="grid gap-4 md:grid-cols-[1fr_auto]">
-                  <input
-                    className="theme-input"
-                    placeholder="输入 task_id（UUID）/ Enter task_id"
-                    value={taskId}
-                    onChange={(e) => setTaskId(e.target.value)}
-                  />
-                  <button
-                    onClick={() => void queryTask()}
-                    disabled={taskLoading || !taskId.trim()}
-                    className="inline-flex items-center justify-center gap-2 rounded-xl bg-white/10 px-4 py-2 text-sm font-medium transition hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    {taskLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-                    {tSlash("查询任务 / Query")}
-                  </button>
-                </div>
-
-                {taskError ? (
-                  <p className="mt-3 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-200">
-                    {tSlash("查询失败 / Query failed")}: {taskError}
-                  </p>
-                ) : null}
-
-                {taskResult ? (
-                  <div className="mt-4 rounded-xl border border-white/10 bg-black/30 p-4 text-sm">
-                    <p className="mb-1 text-white/60">{tSlash("任务 ID / Task ID")}</p>
-                    <p className="font-mono text-white">{taskResult.task_id}</p>
-                    <div className="mt-3 grid gap-3 md:grid-cols-2">
-                      <div>
-                        <p className="mb-1 text-white/60">{tSlash("状态 / Status")}</p>
-                        <p className="theme-status-pill inline-block rounded-md px-2 py-1 font-mono">{taskResult.status}</p>
-                      </div>
-                      <div>
-                        <p className="mb-1 text-white/60">{tSlash("错误信息 / Error")}</p>
-                        <p className="text-red-200">{taskResult.error_text || "--"}</p>
-                      </div>
-                    </div>
-                    <p className="mb-1 mt-4 text-white/60">{tSlash("结果 JSON / Result")}</p>
-                    <pre className="max-h-72 overflow-auto rounded-lg border border-white/10 bg-[#12151f] p-3 text-xs text-white/80">
-                      {JSON.stringify(taskResult.result_json ?? null, null, 2)}
-                    </pre>
-                  </div>
-                ) : null}
-              </section>
             </>
           ) : null}
         </main>

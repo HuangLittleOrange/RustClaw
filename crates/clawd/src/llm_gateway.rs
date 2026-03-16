@@ -21,15 +21,41 @@ fn matches_provider_override(name: &str, provider_type: &str, override_name: &st
 pub(crate) fn build_providers(config: &AppConfig) -> Vec<Arc<LlmProviderRuntime>> {
     let model_override = std::env::var("RUSTCLAW_MODEL_OVERRIDE").ok();
     let provider_override = std::env::var("RUSTCLAW_PROVIDER_OVERRIDE").ok();
+    build_providers_with_overrides(
+        config,
+        provider_override.as_deref(),
+        model_override.as_deref(),
+        true,
+    )
+}
+
+pub(crate) fn build_providers_for_selection(
+    config: &AppConfig,
+    provider_override: Option<&str>,
+    model_override: Option<&str>,
+) -> Vec<Arc<LlmProviderRuntime>> {
+    build_providers_with_overrides(config, provider_override, model_override, false)
+}
+
+fn build_providers_with_overrides(
+    config: &AppConfig,
+    provider_override: Option<&str>,
+    model_override: Option<&str>,
+    log_env_overrides: bool,
+) -> Vec<Arc<LlmProviderRuntime>> {
     if let Some(model) = &model_override {
-        info!("Model override enabled: {}", model);
+        if log_env_overrides {
+            info!("Model override enabled: {}", model);
+        }
     }
     if let Some(name) = &provider_override {
-        info!("Provider override enabled: {}", name);
+        if log_env_overrides {
+            info!("Provider override enabled: {}", name);
+        }
     }
 
     let source_providers = if config.llm.providers.is_empty() {
-        synthesize_llm_providers(config)
+        synthesize_llm_providers(config, provider_override, model_override)
     } else {
         config.llm.providers.clone()
     };
@@ -37,7 +63,7 @@ pub(crate) fn build_providers(config: &AppConfig) -> Vec<Arc<LlmProviderRuntime>
     let mut providers: Vec<_> = source_providers
         .iter()
         .filter_map(|p| {
-            if let Some(name) = &provider_override {
+            if let Some(name) = provider_override {
                 // Accept override by vendor alias (openai/google/anthropic/grok/deepseek/qwen/minimax/custom),
                 // provider runtime name (vendor-xxx), or provider type.
                 if !matches_provider_override(&p.name, &p.provider_type, name) {
@@ -57,8 +83,8 @@ pub(crate) fn build_providers(config: &AppConfig) -> Vec<Arc<LlmProviderRuntime>
             }
 
             let mut runtime_cfg = p.clone();
-            if let Some(model) = &model_override {
-                runtime_cfg.model = model.clone();
+            if let Some(model) = model_override {
+                runtime_cfg.model = model.to_string();
             }
 
             let client = Client::builder()
@@ -75,7 +101,7 @@ pub(crate) fn build_providers(config: &AppConfig) -> Vec<Arc<LlmProviderRuntime>
         .collect();
 
     if providers.is_empty() {
-        if let Some(name) = &provider_override {
+        if let Some(name) = provider_override {
             warn!("Provider override not found in config: {}", name);
         }
     }
@@ -84,10 +110,14 @@ pub(crate) fn build_providers(config: &AppConfig) -> Vec<Arc<LlmProviderRuntime>
     providers
 }
 
-fn synthesize_llm_providers(config: &AppConfig) -> Vec<LlmProviderConfig> {
+fn synthesize_llm_providers(
+    config: &AppConfig,
+    provider_override: Option<&str>,
+    model_override: Option<&str>,
+) -> Vec<LlmProviderConfig> {
     let mut out = Vec::new();
-    let selected_vendor = config.llm.selected_vendor.as_deref();
-    let selected_model = config.llm.selected_model.as_deref();
+    let selected_vendor = provider_override.or(config.llm.selected_vendor.as_deref());
+    let selected_model = model_override.or(config.llm.selected_model.as_deref());
 
     if let Some(v) = &config.llm.openai {
         if selected_vendor.is_none() || selected_vendor == Some("openai") {
@@ -261,16 +291,16 @@ pub(crate) async fn run_with_fallback_with_prompt_file(
     super::run_llm_with_fallback_with_prompt_file(state, task, prompt, prompt_file).await
 }
 
-pub(crate) fn selected_openai_api_key(state: &AppState) -> String {
-    super::selected_openai_api_key(state)
+pub(crate) fn selected_openai_api_key(state: &AppState, task: Option<&ClaimedTask>) -> String {
+    super::selected_openai_api_key_for_task(state, task)
 }
 
-pub(crate) fn selected_openai_base_url(state: &AppState) -> String {
-    super::selected_openai_base_url(state)
+pub(crate) fn selected_openai_base_url(state: &AppState, task: Option<&ClaimedTask>) -> String {
+    super::selected_openai_base_url_for_task(state, task)
 }
 
-pub(crate) fn selected_openai_model(state: &AppState) -> String {
-    super::selected_openai_model(state)
+pub(crate) fn selected_openai_model(state: &AppState, task: Option<&ClaimedTask>) -> String {
+    super::selected_openai_model_for_task(state, task)
 }
 
 #[cfg(test)]
